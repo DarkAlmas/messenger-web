@@ -183,6 +183,26 @@ let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
 const e2eMod = import('./e2e.js').then(m => { m.init(sb); return (E2E = m); });
+// Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
+let devCheckAt = 0;
+async function deviceCheck(force) {
+  if (!me || (!force && Date.now() - devCheckAt < 60000)) return;
+  devCheckAt = Date.now();
+  const { error } = await sb.auth.getUser();
+  if (error && (error.status === 401 || error.status === 403 || /session|jwt|not found/i.test(error.message))) {
+    console.warn('Сессия больше не действует — выходим');
+    try { if (E2E) await E2E.wipe(); } catch (e) { /* всё равно выходим */ }
+    await sb.auth.signOut({ scope: 'local' }).catch(() => {});
+    return;
+  }
+  if (error) return; // нет сети — проверим позже
+  if (!(await e2eStart())) return;
+  try { const r = await E2E.checkDevice(); if (r === 'restored') console.info('Ключи устройства опубликованы заново'); }
+  catch (e) { console.warn('Проверка ключей устройства:', e); }
+}
+setInterval(() => deviceCheck(true), 10 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') deviceCheck(false); });
+window.addEventListener('focus', () => deviceCheck(false));
 async function e2eStart() {
   try { const m = await e2eMod; await m.ensureReady(); e2eErr = null; }
   catch (e) { e2eErr = e; console.warn('E2E недоступно:', e); }
@@ -461,7 +481,7 @@ async function onSession(session) {
   if (me) {
     stopQr();
     txt($('me'), await nameOf(me.id));
-    e2eStart();
+    e2eStart().then(() => deviceCheck(true));
     loadChats();
   } else { qrFails = 0; startQr(); }
 }

@@ -65,7 +65,15 @@ export function ensureReady() {
       store = Store.newDevice();
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
     } else store = Store.load(kv.state);
-    if (kv.uploaded !== '1') {
+    await publish(dev);
+    await topUp();
+    return dev;
+  }).catch(e => { ready = null; throw e; });
+  return ready;
+}
+
+async function publish(dev) {
+  if (kv.uploaded !== '1') {
       const row = { ...JSON.parse(store.publicRow()), device_id: dev, user_id: uid };
       const { error } = await sb.from('devices_keys').insert(row);
       if (error) {
@@ -75,10 +83,20 @@ export function ensureReady() {
       }
       await put('uploaded', '1');
     }
-    await topUp();
-    return dev;
-  }).catch(e => { ready = null; throw e; });
-  return ready;
+}
+
+/** Строка devices_keys этого устройства ещё на сервере? Нет (её удалила серверная чистка) — публикуем ключи заново. */
+export function checkDevice() {
+  return locked(async () => {
+    if (!store || !kv.dev) return 'not-ready';
+    const { data, error } = await sb.from('devices_keys').select('device_id').eq('device_id', kv.dev).maybeSingle();
+    if (error) throw error;
+    if (data) { await topUp(); return 'ok'; }
+    for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп этому устройству нужно раздать заново
+    await put('uploaded', '0');
+    await publish(kv.dev); await topUp();
+    return 'restored';
+  });
 }
 
 async function topUp() {
