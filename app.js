@@ -169,9 +169,10 @@ async function addMsg(m) {
   const small = document.createElement('small');
   txt(small, m.sender_id ? await nameOf(m.sender_id) : 'удалённый аккаунт');
   const b = document.createElement('span');
-  if (m.ciphertext && !m.body) { chatHasE2e = true; b.className = 'e2e'; txt(b, '🔒 Зашифровано — откройте на телефоне'); }
-  else txt(b, m.body);
-  d.append(small, b);
+  let warn = null;
+  if (m.ciphertext) { chatHasE2e = true; b.className = 'e2e'; txt(b, '🔒 зашифровано, откройте в приложении'); }
+  else { txt(b, m.body); warn = document.createElement('em'); warn.className = 'noe2e'; txt(warn, '⚠ не зашифровано'); }
+  d.append(small, b); if (warn) d.append(warn);
   const box = $('messages'); box.appendChild(d); box.scrollTop = box.scrollHeight;
 }
 async function openChat(c, li) {

@@ -32,3 +32,4 @@ label{display:block;font-size:13px;color:#8ea0b3;margin-top:8px}
 #toggleReg{display:block;min-height:44px;margin-top:8px;font-size:15px}
 button:disabled{opacity:.6;cursor:default}
 @media(max-width:640px){.hint{font-size:15px}input{font-size:16px;min-height:44px}#qrRetry{min-height:44px}}
+.msg .noe2e { display: block; font-size: .75em; color: #b26a00; font-style: normal; margin-top: 2px; }
