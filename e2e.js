@@ -1,7 +1,7 @@
 // Сквозное шифрование на сайте: официальный libsignal (Rust), собранный в WASM (vendor/sigwasm).
 // Протокол и формат — как в Android-клиенте (E2eCore/E2eGroup): X3DH/PQXDH + Double Ratchet, Kyber-1024, Sender Keys.
 // Своей криптографии здесь нет.
-import initWasm, { Store, distId, compareScannable } from './vendor/sigwasm/sigwasm.js?v=20261014e';
+import initWasm, { Store, distId, compareScannable } from './vendor/sigwasm/sigwasm.js?v=20261014f';
 
 const OTK_BATCH = 100, OTK_LOW = 20, CLAIM_TTL = 10 * 60 * 1000;
 let sb, store = null, kv = {}, db, uid = null, ready = null;
@@ -54,7 +54,7 @@ export function init(client) { sb = client; }
 /** Ключи для текущей сессии (session_id = device_id), публикация, пополнение одноразовых prekey. */
 export function ensureReady() {
   if (!ready) ready = locked(async () => {
-    await initWasm({ module_or_path: new URL('./vendor/sigwasm/sigwasm_bg.wasm?v=20261014e', import.meta.url) });
+    await initWasm({ module_or_path: new URL('./vendor/sigwasm/sigwasm_bg.wasm?v=20261014f', import.meta.url) });
     if (!db) { db = await idb(); await syncFromDb(); }
     const s = await token(); uid = s.user.id;
     const dev = sessionId(s.access_token);
@@ -113,7 +113,7 @@ async function devicesFor(user) {
   const trust = jget('trust:' + user);
   if (!claimedAt[user] || Date.now() - claimedAt[user] > CLAIM_TTL) {
     const rows = chk(await sb.rpc('claim_prekeys', { p_user: user })) || [];
-    claimedAt[user] = Date.now();
+    if (rows.length) claimedAt[user] = Date.now(); else delete claimedAt[user]; // пустой ответ не кэшируем: собеседник может войти в любой момент
     const valid = {};
     for (const o of rows) {
       if (o.device_id === kv.dev || !o.kyber_prekey) continue;
