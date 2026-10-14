@@ -8,8 +8,8 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: blob: https://tbbaztmtkcrzxnkkmtqv.supabase.co; connect-src 'self' https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; base-uri 'none'; form-action 'none';">
 <title>Мессенджер</title>
 <link rel="icon" href="data:,">
-<script src="theme.js?v=20261014m"></script>
-<link rel="stylesheet" href="style.css?v=20261014m">
+<script src="theme.js?v=20261015a"></script>
+<link rel="stylesheet" href="style.css?v=20261015a">
 </head>
 <body>
 <div id="notice" role="alert" hidden><span id="noticeText"></span><button type="button" id="noticeClose" aria-label="Закрыть">✕</button></div>
@@ -55,10 +55,14 @@
   <main id="chatPane">
     <header id="chatHead" class="bar">
       <button type="button" id="backBtn" class="icon back" aria-label="Назад к чатам">←</button>
-      <button type="button" id="peerBtn" class="peer"><span id="chatAva" class="ava" hidden></span><span id="chatTitle">Выберите чат</span></button>
+      <button type="button" id="peerBtn" class="peer"><span id="chatAva" class="ava" hidden></span><span class="titles"><span id="chatTitle">Выберите чат</span><small id="chatSub"></small></span></button>
       <button type="button" id="safetyBtn" class="link" hidden>🔒 Код безопасности</button>
+      <button type="button" id="chatMenuBtn" class="icon" aria-label="Меню чата" title="Меню чата" hidden>⋮</button>
     </header>
+    <div id="pinBar" hidden><span class="pin-line"></span><button type="button" id="pinOpen" class="pin-text"><b id="pinLabel">Закреплённое сообщение</b><span id="pinPreview"></span></button><button type="button" id="unpinBtn" class="icon" aria-label="Открепить" title="Открепить">✕</button></div>
     <div id="messages"><button type="button" id="olderBtn" class="ghost older" hidden>Загрузить более ранние сообщения</button><p class="empty-state">Выберите чат слева или найдите собеседника по никнейму.</p></div>
+    <button type="button" id="jumpBtn" class="jump" aria-label="Вниз к последним сообщениям" title="Вниз" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span id="jumpCount" hidden></span></button>
+    <div id="composeBar" hidden><span id="composeIcon">↩</span><div class="cb-text"><b id="composeTitle"></b><span id="composePreview"></span></div><button type="button" id="composeCancel" class="icon" aria-label="Отменить" title="Отменить">✕</button></div>
     <form id="sendForm" hidden>
       <button type="button" id="attachBtn" class="icon" title="Отправить файл (до 25 МБ, со сквозным шифрованием)" aria-label="Прикрепить файл">📎</button>
       <input type="file" id="fileInput" hidden>
@@ -100,6 +104,12 @@
         </div>
       </div>
       <div class="group" data-tab="settings">
+        <h3>Конфиденциальность</h3>
+        <label>Кто видит, когда я был(а) в сети</label>
+        <div class="seg" id="seenSeg" role="radiogroup"><button type="button" data-v="everyone">Все</button><button type="button" data-v="contacts">Мои контакты</button><button type="button" data-v="nobody">Никто</button></div>
+        <p class="hint small" id="seenMsg">«Мои контакты» — те, с кем у вас есть личный чат. Если вы скрываете время, собеседники видят «был(а) недавно».</p>
+      </div>
+      <div class="group" data-tab="settings">
         <h3>Это устройство</h3>
         <p class="hint">Почта: <span id="setEmail"></span></p>
         <p class="hint">Устройство шифрования: <code id="setDevice">—</code></p>
@@ -114,6 +124,14 @@
     <button type="button" data-nav="settings" aria-label="Настройки" title="Настройки"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
   </nav>
 </section>
+<div id="ctxMenu" role="menu" hidden></div>
+<div id="toast" role="status" hidden></div>
+<dialog id="fwdDlg">
+  <h3>Переслать в…</h3>
+  <input id="fwdSearch" placeholder="Поиск чата" autocomplete="off">
+  <ul id="fwdList"></ul>
+  <div class="dlg-actions"><button type="button" id="fwdClose" class="link">Отмена</button></div>
+</dialog>
 <dialog id="peerDlg">
   <div class="peer-card"><span id="peerAva" class="ava xl"></span><h3 id="peerName"></h3><p id="peerNick" class="hint"></p><p id="peerBio"></p></div>
   <div class="dlg-actions"><button type="button" id="closePeer" class="link">Закрыть</button></div>
@@ -136,7 +154,7 @@
 </dialog>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
-<script src="config.js?v=20261014m"></script>
-<script src="app.js?v=20261014m"></script>
+<script src="config.js?v=20261015a"></script>
+<script src="app.js?v=20261015a"></script>
 </body>
 </html>

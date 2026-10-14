@@ -36,6 +36,9 @@ function ruErr(e) {
   if (l.includes('rate limit') || l.includes('too many') || l.includes('429')) return 'Слишком много попыток. Подождите немного и попробуйте снова';
   if (l.includes('too big') || l.includes('too large') || l.includes('payload')) return 'Слишком большой размер (сообщение или файл)';
   if (l.includes('permission denied for function')) return 'Сервер сейчас не даёт сохранить профиль (ошибка прав на сервере). Мы уже знаем о ней — попробуйте позже';
+  if (l.includes('pin limit 10')) return 'Можно закрепить не больше 10 чатов';
+  if (l.includes('pin limit 50')) return 'В чате уже 50 закреплённых сообщений';
+  if (l.includes('only group admins can pin')) return 'Закреплять сообщения в группе могут только владелец и администраторы';
   if (l.includes('reserved')) return 'Этот никнейм зарезервирован';
   if (l.includes('display_name') && l.includes('check')) return 'Недопустимое имя (1–64 символа, без управляющих символов)';
   if (l.includes('bucket not found')) return 'Хранилище аватаров ещё не создано на сервере';
@@ -175,29 +178,115 @@ async function startQr() {
 }
 
 // ---------- чаты ----------
+let lastChats = [], showArchive = false;
+const fmtListTime = t => { const d = new Date(t), n = new Date(); if (d.toDateString() === n.toDateString()) return fmtTime(t); if (n - d < 6 * 864e5) return d.toLocaleDateString('ru-RU', { weekday: 'short' }); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }); };
+const isMuted = c => c.muted_until && new Date(c.muted_until) > new Date();
 async function loadChats() {
   const ul = $('chatList');
-  const { data, error } = await sb.rpc('list_chats');
-  if (error) { showErr('Не удалось загрузить чаты: ' + ruErr(error)); return; }
+  const [{ data, error }, { data: prefs, error: pe }] = await Promise.all([
+    sb.rpc('list_chats'),
+    sb.from('chat_members').select('chat_id, pinned, muted_until, archived, role').eq('user_id', me.id)
+  ]);
+  if (error || pe) { showErr('Не удалось загрузить чаты: ' + ruErr(error || pe)); return; }
+  const pm = {}; for (const p of prefs || []) pm[p.chat_id] = p;
+  lastChats = (data || []).map(c => ({ id: c.chat_id, kind: c.kind, title: c.kind === 'direct' ? null : c.title, name: c.title, peer: c.peer_id, last_at: c.last_at, last_sender: c.last_sender, last_has_file: c.last_has_file, unread: c.unread, ...(pm[c.chat_id] || {}) }));
+  lastChats.sort((x, y) => (y.pinned ? 1 : 0) - (x.pinned ? 1 : 0) || new Date(y.last_at) - new Date(x.last_at));
+  const archived = lastChats.filter(c => c.archived), visible = lastChats.filter(c => !!c.archived === showArchive);
   ul.innerHTML = '';
-  for (const c of data || []) {
+  if (showArchive) {
+    const li = document.createElement('li'); li.className = 'archive-row'; li.tabIndex = 0;
+    const ava = avatarEl({ display_name: '←', id: 'x' }); txt(ava, '←');
+    const meta = document.createElement('div'); meta.className = 'meta'; const nm = document.createElement('div'); nm.className = 'name'; txt(nm, 'Архив'); const sub = document.createElement('div'); sub.className = 'sub'; txt(sub, 'Назад ко всем чатам'); meta.append(nm, sub);
+    li.append(ava, meta); li.onclick = () => { showArchive = false; loadChats(); }; ul.append(li);
+  } else if (archived.length) {
+    const li = document.createElement('li'); li.className = 'archive-row'; li.tabIndex = 0; li.dataset.archive = '1';
+    const ava = avatarEl({ display_name: '🗄', id: 'x' }); txt(ava, '🗄');
+    const meta = document.createElement('div'); meta.className = 'meta'; const nm = document.createElement('div'); nm.className = 'name'; txt(nm, 'Архив'); const sub = document.createElement('div'); sub.className = 'sub'; txt(sub, archived.length + ' ' + plural(archived.length, 'чат', 'чата', 'чатов')); meta.append(nm, sub);
+    li.append(ava, meta);
+    const un = archived.reduce((s, c) => s + (c.unread || 0), 0);
+    if (un) { const b = document.createElement('span'); b.className = 'badge muted'; txt(b, String(un)); li.append(b); }
+    li.onclick = () => { showArchive = true; loadChats(); }; ul.append(li);
+  }
+  for (const c of visible) {
     const li = document.createElement('li');
-    li.dataset.id = c.chat_id; li.tabIndex = 0;
-    const chat = { id: c.chat_id, kind: c.kind, title: c.kind === 'direct' ? null : c.title, peer: c.peer_id };
-    const ava = avatarEl(c.peer_id ? null : { display_name: c.title || '?', id: c.chat_id });
+    li.dataset.id = c.id; li.tabIndex = 0;
+    const ava = avatarEl(c.peer ? null : { display_name: c.name || '?', id: c.id });
     const meta = document.createElement('div'); meta.className = 'meta';
-    const nm = document.createElement('div'); nm.className = 'name'; txt(nm, c.kind === 'direct' ? (c.title || 'Личный чат') : (c.title || 'Группа'));
+    const nm = document.createElement('div'); nm.className = 'name'; txt(nm, c.kind === 'direct' ? (c.name || 'Личный чат') : (c.name || 'Группа'));
     const sub = document.createElement('div'); sub.className = 'sub';
     txt(sub, c.last_sender ? (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? '📎 файл' : '🔒 зашифрованное сообщение') : 'Нет сообщений');
     meta.append(nm, sub); li.append(ava, meta);
-    if (c.unread > 0 && !(currentChat && currentChat.id === c.chat_id)) { const b = document.createElement('span'); b.className = 'badge'; txt(b, c.unread > 99 ? '99+' : String(c.unread)); li.append(b); }
-    if (currentChat && currentChat.id === c.chat_id) li.classList.add('active');
-    li.onclick = () => openChat(chat, li);
-    li.onkeydown = e => { if (e.key === 'Enter') openChat(chat, li); };
+    const side = document.createElement('div'); side.className = 'side-col';
+    const tm = document.createElement('span'); tm.className = 'time'; txt(tm, c.last_sender ? fmtListTime(c.last_at) : ''); side.append(tm);
+    const fl = document.createElement('span'); fl.className = 'flags';
+    if (isMuted(c)) { const s = document.createElement('span'); s.title = 'Без звука'; txt(s, '🔕'); fl.append(s); }
+    if (c.unread > 0 && !(currentChat && currentChat.id === c.id)) { const b = document.createElement('span'); b.className = 'badge' + (isMuted(c) ? ' muted' : ''); txt(b, c.unread > 99 ? '99+' : String(c.unread)); fl.append(b); }
+    else if (c.pinned) { const s = document.createElement('span'); s.className = 'pin-flag'; s.title = 'Закреплён'; txt(s, '📌'); fl.append(s); }
+    side.append(fl); li.append(side);
+    if (currentChat && currentChat.id === c.id) li.classList.add('active');
+    li.onclick = () => openChat(c, li);
+    li.onkeydown = e => { if (e.key === 'Enter') openChat(c, li); };
+    li.oncontextmenu = e => { e.preventDefault(); openMenu(e, chatMenuItems(c)); };
+    longPress(li, e => openMenu(e, chatMenuItems(c)));
     ul.appendChild(li);
-    if (c.peer_id) getProfile(c.peer_id).then(p => { if (p) { txt(nm, displayName(p)); ava.replaceWith(avatarEl(p)); } });
+    if (c.peer) getProfile(c.peer).then(p => { if (p) { txt(nm, displayName(p)); c.name = displayName(p); ava.replaceWith(avatarEl(p)); } });
   }
-  if (!ul.children.length) { const li = document.createElement('li'); li.className = 'hint'; txt(li, 'Чатов пока нет. Найдите собеседника по никнейму.'); ul.append(li); }
+  if (!visible.length) { const li = document.createElement('li'); li.className = 'hint'; txt(li, showArchive ? 'В архиве пусто.' : 'Чатов пока нет. Найдите собеседника по никнейму.'); ul.append(li); }
+  if (currentChat) { const cur = lastChats.find(x => x.id === currentChat.id); if (cur) Object.assign(currentChat, { pinned: cur.pinned, muted_until: cur.muted_until, archived: cur.archived, role: cur.role }); }
+}
+const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
+function chatMenuItems(c) {
+  const muted = isMuted(c), H = 3600e3;
+  const mute = until => () => chatPrefs(c, { p_muted_until: until }, 'Уведомления отключены');
+  return [
+    { t: c.pinned ? 'Открепить' : 'Закрепить', i: '📌', f: () => chatPrefs(c, { p_pinned: !c.pinned }, c.pinned ? 'Чат откреплён' : 'Чат закреплён') },
+    ...(muted ? [{ t: 'Включить звук', i: '🔔', f: () => chatPrefs(c, { p_unmute: true }, 'Звук включён') }] : [
+      { t: 'Без звука на 1 час', i: '🔕', f: mute(new Date(Date.now() + H).toISOString()) },
+      { t: 'Без звука на 8 часов', i: '🔕', f: mute(new Date(Date.now() + 8 * H).toISOString()) },
+      { t: 'Без звука на 1 день', i: '🔕', f: mute(new Date(Date.now() + 24 * H).toISOString()) },
+      { t: 'Без звука навсегда', i: '🔕', f: mute('9999-12-31T00:00:00Z') }]),
+    { t: c.archived ? 'Вернуть из архива' : 'В архив', i: '🗄', f: () => chatPrefs(c, { p_archived: !c.archived }, c.archived ? 'Чат возвращён из архива' : 'Чат перенесён в архив') }
+  ];
+}
+async function chatPrefs(c, args, done) {
+  const { error } = await sb.rpc('set_chat_prefs', { p_chat: c.id, ...args });
+  if (error) return alert(ruErr(error));
+  toast(done); await loadChats();
+}
+let toastT = null;
+function toast(s) { const t = $('toast'); txt(t, s); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2500); }
+
+// ---------- контекстное меню (правый клик / долгое нажатие) ----------
+function openMenu(e, items) {
+  const m = $('ctxMenu'); m.textContent = '';
+  for (const it of items) {
+    if (it === '-') { const s = document.createElement('div'); s.className = 'sep'; m.append(s); continue; }
+    const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); if (it.danger) b.className = 'danger-item';
+    const ic = document.createElement('span'); ic.setAttribute('aria-hidden', 'true'); txt(ic, it.i || ''); const tx = document.createElement('span'); txt(tx, it.t);
+    b.append(ic, tx); b.dataset.act = it.t;
+    b.onclick = () => { closeMenu(); Promise.resolve().then(it.f).catch(err => alert(err.userMsg || ruErr(err))); };
+    m.append(b);
+  }
+  m.hidden = false;
+  const pt = e.touches ? e.touches[0] : e;
+  const x = pt.clientX || 20, y = pt.clientY || 20, r = m.getBoundingClientRect();
+  m.style.left = Math.max(6, Math.min(x, innerWidth - r.width - 6)) + 'px';
+  m.style.top = Math.max(6, Math.min(y, innerHeight - r.height - 6)) + 'px';
+  const first = m.querySelector('button'); if (first) first.focus({ preventScroll: true });
+}
+function closeMenu() { $('ctxMenu').hidden = true; }
+document.addEventListener('pointerdown', e => { if (!$('ctxMenu').hidden && !$('ctxMenu').contains(e.target)) closeMenu(); }, true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMenu(); if (!$('composeBar').hidden) cancelCompose(); } });
+window.addEventListener('resize', closeMenu);
+$('messages').addEventListener('scroll', closeMenu, { passive: true });
+// Долгое нажатие на тач-экране (iOS не шлёт contextmenu)
+function longPress(el, fn) {
+  let t = null, sx = 0, sy = 0;
+  el.addEventListener('touchstart', e => { const p = e.touches[0]; sx = p.clientX; sy = p.clientY; t = setTimeout(() => { t = null; el.dataset.lp = '1'; fn({ clientX: sx, clientY: sy }); }, 500); }, { passive: true });
+  const stop = () => { clearTimeout(t); t = null; };
+  el.addEventListener('touchmove', e => { const p = e.touches[0]; if (Math.abs(p.clientX - sx) > 10 || Math.abs(p.clientY - sy) > 10) stop(); }, { passive: true });
+  el.addEventListener('touchend', e => { stop(); if (el.dataset.lp) { delete el.dataset.lp; e.preventDefault(); } });
+  el.addEventListener('contextmenu', e => { if (e.pointerType === 'touch' || el.dataset.lp) e.preventDefault(); });
 }
 let loadChatsT = null;
 function loadChatsSoon() { clearTimeout(loadChatsT); loadChatsT = setTimeout(() => loadChats().catch(() => {}), 400); }
@@ -338,24 +427,245 @@ async function renderMsg(m, d) {
         fb.onclick = () => { fb.disabled = true; downloadFile(pl.f, !mine).catch(e => alert(e.userMsg || ruErr(e))).finally(() => { fb.disabled = false; }); };
         d.append(fb);
       }
-      if (mine && !pl.f) {
-        const eb = document.createElement('button'); eb.type = 'button'; eb.className = 'edit'; eb.title = 'Изменить'; eb.setAttribute('aria-label', 'Изменить'); txt(eb, '✏️');
-        eb.onclick = () => editMsg(m, pl.t);
-        foot.append(eb);
-      }
       lock.className = 'lock'; lock.title = 'Сквозное шифрование'; txt(lock, '🔒');
     } else { b.className = 'body e2e'; txt(b, pl && pl.other ? 'зашифровано для другого устройства' : pl && pl.fail ? 'не удалось расшифровать' : 'зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
   } else {
     txt(b, m.body);
     lock.className = 'noe2e'; lock.title = 'Старое сообщение без шифрования'; txt(lock, '⚠ без шифрования');
   }
+  msgData[m.id] = { m, pl: pl && !pl.other && !pl.fail ? pl : null };
+  if (m.forwarded) { const f = document.createElement('span'); f.className = 'fwd'; txt(f, '↪ Переслано'); d.insertBefore(f, small.textContent ? small.nextSibling : d.firstChild); }
+  if (m.reply_to) {
+    const q = document.createElement('span'); q.className = 'reply'; q.dataset.to = m.reply_to;
+    fillQuote(q, m.reply_to);
+    q.onclick = ev => { ev.stopPropagation(); jumpTo(m.reply_to); };
+    d.insertBefore(q, b);
+  }
+  if (pins.includes(m.id)) { const p = document.createElement('span'); p.className = 'pinned-ico'; p.title = 'Закреплено'; txt(p, '📌'); foot.append(p); }
   if (m.edited_at) { const e = document.createElement('span'); txt(e, 'изм.'); foot.append(e); }
   const tm = document.createElement('time'); tm.dateTime = m.created_at; txt(tm, fmtTime(m.created_at));
   foot.append(lock, tm);
   if (mine) { const t = document.createElement('span'); t.className = 'ticks'; foot.append(t); }
   d.append(foot);
   if (mine) paintTicks(d);
+  if (!d.dataset.wired) { d.dataset.wired = '1'; wireMsg(d); }
+  // цитаты, ссылающиеся на это сообщение, обновляем
+  document.querySelectorAll(`#messages .reply[data-to="${m.id}"]`).forEach(q => fillQuote(q, m.id));
+  sepsSoon();
 }
+const msgData = {}; // id → { m, pl }
+function previewOf(id) {
+  const x = msgData[id]; if (!x) return 'Сообщение';
+  if (!x.pl) return x.m.ciphertext ? '🔒 Зашифрованное сообщение' : (x.m.body || 'Сообщение');
+  return x.pl.t || (x.pl.f ? '📎 ' + (x.pl.f.n || 'файл') : 'Сообщение');
+}
+function fillQuote(q, id) {
+  q.textContent = ''; const x = msgData[id];
+  const b = document.createElement('b'); txt(b, x ? (x.m.sender_id === me.id ? 'Вы' : (profiles[x.m.sender_id] ? displayName(profiles[x.m.sender_id]) : '…')) : 'Ответ');
+  const s = document.createElement('span'); txt(s, x ? previewOf(id) : 'сообщение');
+  q.append(b, s);
+}
+function jumpTo(id) {
+  const d = msgEls[id];
+  if (!d) return toast('Сообщение не загружено — нажмите «Загрузить более ранние сообщения»');
+  d.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  d.classList.add('flash'); setTimeout(() => d.classList.remove('flash'), 1200);
+}
+function msgMenuItems(id) {
+  const x = msgData[id]; if (!x) return [];
+  const m = x.m, mine = m.sender_id === me.id, items = [];
+  items.push({ t: 'Ответить', i: '↩', f: () => startReply(id) });
+  if (x.pl) items.push({ t: 'Переслать', i: '↪', f: () => openForward(id) });
+  if (canPin()) items.push(pins.includes(id) ? { t: 'Открепить', i: '📌', f: () => pinMsg(id, false) } : { t: 'Закрепить', i: '📌', f: () => pinMsg(id, true) });
+  if (mine && x.pl && !x.pl.f && m.ciphertext) items.push({ t: 'Изменить', i: '✏️', f: () => startEdit(id) });
+  if (x.pl && x.pl.t) items.push({ t: 'Копировать текст', i: '📋', f: () => navigator.clipboard.writeText(x.pl.t).then(() => toast('Текст скопирован')) });
+  if (mine) items.push('-', { t: 'Удалить у всех', i: '🗑', danger: true, f: () => deleteMsg(id) });
+  return items;
+}
+function wireMsg(d) {
+  const id = () => d.dataset.id;
+  d.addEventListener('contextmenu', e => { e.preventDefault(); openMenu(e, msgMenuItems(id())); });
+  d.addEventListener('dblclick', e => { if (e.target.closest('button')) return; window.getSelection && window.getSelection().removeAllRanges(); startReply(id()); });
+  longPress(d, e => openMenu(e, msgMenuItems(id())));
+  // свайп влево — ответить
+  let sx = 0, sy = 0, dx = 0, on = false;
+  d.addEventListener('touchstart', e => { const p = e.touches[0]; sx = p.clientX; sy = p.clientY; dx = 0; on = true; }, { passive: true });
+  d.addEventListener('touchmove', e => { if (!on) return; const p = e.touches[0]; dx = p.clientX - sx; if (Math.abs(p.clientY - sy) > 30) { on = false; d.style.transform = ''; return; } if (dx < 0) d.style.transform = `translateX(${Math.max(dx, -80)}px)`; }, { passive: true });
+  d.addEventListener('touchend', () => { d.style.transform = ''; if (on && dx < -60) startReply(id()); on = false; });
+}
+
+// ---------- ответ и правка в строке ввода ----------
+let replyTo = null, editing = null;
+function startReply(id) {
+  if (!msgData[id]) return;
+  editing = null; replyTo = id;
+  const x = msgData[id];
+  txt($('composeIcon'), '↩'); txt($('composeTitle'), 'В ответ ' + (x.m.sender_id === me.id ? 'себе' : (profiles[x.m.sender_id] ? displayName(profiles[x.m.sender_id]) : ''))); txt($('composePreview'), previewOf(id));
+  $('composeBar').hidden = false; $('msgInput').focus();
+}
+function startEdit(id) {
+  const x = msgData[id]; if (!x || !x.pl) return;
+  replyTo = null; editing = id;
+  txt($('composeIcon'), '✏️'); txt($('composeTitle'), 'Редактирование'); txt($('composePreview'), x.pl.t);
+  $('composeBar').hidden = false; $('msgInput').value = x.pl.t; $('msgInput').focus();
+}
+function cancelCompose() { if (editing) $('msgInput').value = ''; replyTo = null; editing = null; $('composeBar').hidden = true; }
+$('composeCancel').onclick = cancelCompose;
+
+// ---------- удаление у всех (автор, через RLS messages delete own) ----------
+async function deleteMsg(id) {
+  const x = msgData[id]; if (!x) return;
+  if (!confirm('Удалить сообщение у всех участников чата? Отменить будет нельзя.')) return;
+  const { error } = await sb.from('messages').delete().eq('id', id);
+  if (error) throw error;
+  if (x.pl && x.pl.f && x.pl.f.p) await sb.storage.from('chat-files').remove([x.pl.f.p]).catch(() => {});
+  removeMsgEl(id); toast('Сообщение удалено'); loadChatsSoon();
+}
+function removeMsgEl(id) {
+  const d = msgEls[id]; if (!d) return;
+  d.remove(); delete msgEls[id]; delete msgData[id];
+  if (replyTo === id || editing === id) cancelCompose();
+  if (pins.includes(id)) loadPins();
+  sepsSoon();
+}
+
+// ---------- разделители дат ----------
+let sepT = null;
+function sepsSoon() { clearTimeout(sepT); sepT = setTimeout(redoSeps, 30); }
+function dayLabel(t) {
+  const d = new Date(t), n = new Date(), y = new Date(n - 864e5);
+  if (d.toDateString() === n.toDateString()) return 'Сегодня';
+  if (d.toDateString() === y.toDateString()) return 'Вчера';
+  return d.toLocaleDateString('ru-RU', d.getFullYear() === n.getFullYear() ? { day: 'numeric', month: 'long' } : { day: 'numeric', month: 'long', year: 'numeric' });
+}
+function redoSeps() {
+  const box = $('messages'); box.querySelectorAll('.date-sep').forEach(x => x.remove());
+  let prev = null;
+  for (const d of box.querySelectorAll('.msg')) {
+    const k = new Date(d.dataset.at).toDateString();
+    if (k !== prev) { const s = document.createElement('div'); s.className = 'date-sep'; txt(s, dayLabel(d.dataset.at)); d.before(s); prev = k; }
+  }
+}
+
+// ---------- кнопка «вниз» со счётчиком новых ----------
+let jumpUnread = 0;
+const farFromBottom = () => { const b = $('messages'); return b.scrollHeight - b.scrollTop - b.clientHeight > 300; };
+function paintJump() { $('jumpBtn').hidden = !currentChat || !farFromBottom(); const c = $('jumpCount'); c.hidden = !jumpUnread; txt(c, jumpUnread > 99 ? '99+' : String(jumpUnread)); }
+$('messages').addEventListener('scroll', () => { if (!farFromBottom()) jumpUnread = 0; paintJump(); }, { passive: true });
+$('jumpBtn').onclick = () => { const b = $('messages'); b.scrollTo({ top: b.scrollHeight, behavior: 'smooth' }); jumpUnread = 0; paintJump(); };
+
+// ---------- закреплённые сообщения (chat_pins + pin_message) ----------
+let pins = [], pinIdx = 0;
+function canPin() { return currentChat && (currentChat.kind === 'direct' || ['owner', 'admin'].includes(currentChat.role)); }
+async function loadPins() {
+  const c = currentChat; if (!c) return;
+  const { data, error } = await sb.from('chat_pins').select('message_id, pinned_at').eq('chat_id', c.id).order('pinned_at', { ascending: false });
+  if (error || currentChat !== c) return;
+  const old = pins; pins = (data || []).map(r => r.message_id);
+  if (pinIdx >= pins.length) pinIdx = 0;
+  paintPinBar();
+  for (const id of new Set([...old, ...pins])) if (msgData[id]) renderMsg(msgData[id].m, msgEls[id]);
+}
+function paintPinBar() {
+  const bar = $('pinBar'); bar.hidden = !pins.length; if (!pins.length) return;
+  const id = pins[pinIdx];
+  txt($('pinLabel'), 'Закреплённое сообщение' + (pins.length > 1 ? ' #' + (pins.length - pinIdx) : ''));
+  txt($('pinPreview'), msgData[id] ? previewOf(id) : 'сообщение не загружено');
+  $('unpinBtn').hidden = !canPin();
+}
+$('pinOpen').onclick = () => { if (!pins.length) return; jumpTo(pins[pinIdx]); pinIdx = (pinIdx + 1) % pins.length; paintPinBar(); };
+$('unpinBtn').onclick = () => { if (pins.length && confirm('Открепить это сообщение?')) pinMsg(pins[pinIdx], false).catch(e => alert(ruErr(e))); };
+async function pinMsg(id, on) {
+  const { error } = await sb.rpc('pin_message', { p_msg: id, p_pin: on });
+  if (error) throw error;
+  toast(on ? 'Сообщение закреплено' : 'Сообщение откреплено'); await loadPins();
+}
+
+// ---------- пересылка: текст/файл заново шифруются для выбранного чата ----------
+let fwdId = null;
+function openForward(id) {
+  fwdId = id; $('fwdSearch').value = ''; paintFwd(); $('fwdDlg').showModal(); $('fwdSearch').focus();
+}
+function paintFwd() {
+  const ul = $('fwdList'), q = $('fwdSearch').value.trim().toLowerCase(); ul.textContent = '';
+  for (const c of lastChats) {
+    const name = c.name || (c.kind === 'direct' ? 'Личный чат' : 'Группа');
+    if (q && !name.toLowerCase().includes(q)) continue;
+    const li = document.createElement('li'); li.dataset.id = c.id; li.tabIndex = 0;
+    const p = c.peer ? profiles[c.peer] : { display_name: name, id: c.id };
+    const s = document.createElement('span'); txt(s, p && c.peer ? displayName(p) : name);
+    li.append(avatarEl(p || { display_name: name, id: c.id }, 'sm'), s);
+    li.onclick = () => doForward(c); li.onkeydown = e => { if (e.key === 'Enter') doForward(c); };
+    ul.append(li);
+  }
+}
+$('fwdSearch').oninput = paintFwd;
+$('fwdClose').onclick = () => $('fwdDlg').close();
+async function doForward(target) {
+  const x = msgData[fwdId]; $('fwdDlg').close(); if (!x || !x.pl) return;
+  try {
+    toast('Пересылаем…');
+    if (x.pl.f) {
+      const plain = await fetchFilePlain(x.pl.f);
+      await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.t || '');
+    } else await sendPayload(target, JSON.stringify({ v: 1, t: x.pl.t }), { forwarded: true });
+    toast('Переслано');
+    if (!currentChat || currentChat.id !== target.id) loadChatsSoon();
+  } catch (e) { alert(e.userMsg || ruErr(e)); }
+}
+
+// ---------- «в сети» / «был(а) в сети» и «печатает…» ----------
+let lastSeen = null, typingUntil = 0, typingWho = null, lastTypingSent = 0;
+async function touchPresence() { if (me && document.visibilityState === 'visible') await sb.rpc('touch_presence').then(() => {}, () => {}); }
+setInterval(touchPresence, 60000);
+document.addEventListener('visibilitychange', touchPresence);
+function seenText(t) {
+  if (!t) return 'был(а) недавно';
+  const d = new Date(t), mins = Math.floor((Date.now() - d) / 60000);
+  if (mins < 2) return 'в сети';
+  if (mins < 60) return 'был(а) в сети ' + mins + ' ' + plural(mins, 'минуту', 'минуты', 'минут') + ' назад';
+  const n = new Date(), y = new Date(n - 864e5);
+  if (d.toDateString() === n.toDateString()) return 'был(а) в сети сегодня в ' + fmtTime(t);
+  if (d.toDateString() === y.toDateString()) return 'был(а) в сети вчера в ' + fmtTime(t);
+  return 'был(а) в сети ' + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+async function loadLastSeen() {
+  const c = currentChat; if (!c || c.kind !== 'direct' || !peerId) return paintSub();
+  const { data, error } = await sb.rpc('get_last_seen', { p_user: peerId });
+  if (currentChat !== c) return;
+  lastSeen = error ? undefined : data; paintSub();
+}
+function paintSub() {
+  const s = $('chatSub'); s.className = '';
+  if (!currentChat) return txt(s, '');
+  if (Date.now() < typingUntil) { s.className = 'typing'; return txt(s, (currentChat.kind === 'direct' ? '' : (typingWho ? typingWho + ' ' : '')) + 'печатает…'); }
+  if (currentChat.kind !== 'direct') return txt(s, 'группа');
+  if (lastSeen === undefined) return txt(s, '');
+  const t = seenText(lastSeen); if (t === 'в сети') s.className = 'online'; txt(s, t);
+}
+setInterval(() => { if (currentChat && document.visibilityState === 'visible') loadLastSeen(); }, 60000);
+setInterval(() => { if (currentChat && typingUntil && Date.now() >= typingUntil) { typingUntil = 0; paintSub(); } }, 1000);
+$('msgInput').addEventListener('input', () => {
+  if (!chan || !currentChat || editing || !$('msgInput').value) return;
+  if (Date.now() - lastTypingSent < 3000) return; // не чаще раза в 3 с
+  lastTypingSent = Date.now();
+  chan.send({ type: 'broadcast', event: 'typing', payload: { u: me.id } }).catch(() => {});
+});
+function onTyping(p) {
+  if (!p || !p.u || p.u === me.id) return;
+  typingUntil = Date.now() + 5000; typingWho = profiles[p.u] ? displayName(profiles[p.u]) : null; paintSub();
+}
+
+// ---------- кто видит «был(а) в сети» ----------
+function paintSeenSeg(v) { document.querySelectorAll('#seenSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
+document.querySelectorAll('#seenSeg button').forEach(b => {
+  b.onclick = async () => {
+    const { error } = await sb.from('profiles').update({ last_seen_visibility: b.dataset.v }).eq('id', me.id);
+    if (error) return txt($('seenMsg'), ruErr(error));
+    profiles[me.id] = { ...(profiles[me.id] || {}), last_seen_visibility: b.dataset.v }; paintSeenSeg(b.dataset.v); toast('Сохранено');
+  };
+});
+
 async function addMsg(m) {
   if (msgEls[m.id]) return updMsg(m);
   const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
@@ -363,10 +673,15 @@ async function addMsg(m) {
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
   await renderMsg(m, d);
   if (nearBottom || m.sender_id === me.id) box.scrollTop = box.scrollHeight;
+  else if (m.sender_id !== me.id && m.created_at > (msgData.__openedAt || '')) { jumpUnread++; }
+  paintJump();
 }
 async function updMsg(m) { const d = msgEls[m.id]; if (d) await renderMsg(m, d); }
 async function openChat(c, li) {
-  currentChat = c; readState = {}; lastMarked = 0;
+  currentChat = c; readState = {}; lastMarked = 0; pins = []; pinIdx = 0; jumpUnread = 0; lastSeen = undefined; typingUntil = 0; cancelCompose(); closeMenu();
+  for (const k of Object.keys(msgData)) delete msgData[k];
+  msgData.__openedAt = new Date().toISOString();
+  $('pinBar').hidden = true; $('jumpBtn').hidden = true; $('chatMenuBtn').hidden = false; txt($('chatSub'), '');
   document.querySelectorAll('#chatList li').forEach(x => x.classList.remove('active')); li.classList.add('active');
   const badge = li.querySelector('.badge'); if (badge) badge.remove();
   $('app').classList.add('in-chat'); $('app').classList.remove('in-settings');
@@ -391,7 +706,14 @@ async function openChat(c, li) {
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => updMsg(p.new))
     // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { readState[p.new.user_id] = p.new.last_read_at; paintAllTicks(); } })
+    // DELETE в Realtime не фильтруется по колонкам — приходит только id, сверяем с загруженными
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, p => { if (p.old && p.old.id && msgEls[p.old.id]) { removeMsgEl(p.old.id); loadChatsSoon(); } })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_pins' }, p => { if (!p.old || !p.old.chat_id || p.old.chat_id === c.id) loadPins(); })
+    .on('broadcast', { event: 'typing' }, p => onTyping(p.payload))
     .subscribe();
+  if (!c.role) { const { data: r } = await sb.from('chat_members').select('role').eq('chat_id', c.id).eq('user_id', me.id).maybeSingle(); if (r) c.role = r.role; }
+  loadPins(); loadLastSeen(); paintSub();
   $('messages').prepend(olderBtn); olderBtn.hidden = true; oldestAt = null;
   const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE);
   if (error) showErr('Не удалось загрузить сообщения: ' + ruErr(error));
@@ -401,6 +723,7 @@ async function openChat(c, li) {
   olderBtn.hidden = !(data && data.length === PAGE);
   if (!(data || []).length) { const p = document.createElement('p'); p.className = 'empty-state'; txt(p, 'Сообщений пока нет. Всё, что вы напишете, будет зашифровано сквозным шифрованием.'); $('messages').append(p); }
   await loadReadState();
+  paintPinBar(); redoSeps();
   maybeMarkRead();
 }
 const PAGE = 200; let oldestAt = null;
@@ -417,7 +740,8 @@ olderBtn.onclick = async () => {
       const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
       btn.after(d); await renderMsg(m, d);
     }
-    box.scrollTop = top0 + (box.scrollHeight - h0); // остаёмся на том же месте
+    redoSeps(); box.scrollTop = top0 + (box.scrollHeight - h0); // остаёмся на том же месте
+    paintPinBar();
     if (data && data.length) oldestAt = data[data.length - 1].created_at;
     btn.hidden = !(data && data.length === PAGE);
   } catch (e) { alert('Не удалось загрузить более ранние сообщения: ' + ruErr(e)); }
@@ -426,6 +750,7 @@ olderBtn.onclick = async () => {
 async function onIncoming(m) {
   const e = $('messages').querySelector('.empty-state'); if (e) e.remove();
   await addMsg(m);
+  if (m.sender_id !== me.id && typingUntil) { typingUntil = 0; paintSub(); }
   if (m.sender_id !== me.id) { readState[m.sender_id] = m.created_at > (readState[m.sender_id] || '') ? m.created_at : readState[m.sender_id]; paintAllTicks(); maybeMarkRead(); }
   loadChatsSoon();
 }
@@ -478,19 +803,27 @@ $('messages').addEventListener('scroll', maybeMarkRead, { passive: true });
 $('sendForm').onsubmit = async e => {
   e.preventDefault();
   const body = $('msgInput').value.trim(); if (!body || !currentChat) return;
-  const chat = currentChat;
-  $('msgInput').value = '';
-  try { await sendPayload(chat, JSON.stringify({ v: 1, t: body })); }
-  catch (err) { $('msgInput').value = body; alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
+  const chat = currentChat, rt = replyTo, ed = editing;
+  if (ed) {
+    const x = msgData[ed];
+    if (!x || body === x.pl.t) return cancelCompose();
+    $('msgInput').value = ''; cancelCompose();
+    try { await editEncrypted(x.m, JSON.stringify({ v: 1, t: body })); }
+    catch (err) { alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
+    return;
+  }
+  $('msgInput').value = ''; cancelCompose();
+  try { await sendPayload(chat, JSON.stringify({ v: 1, t: body }), rt ? { reply_to: rt } : null); }
+  catch (err) { $('msgInput').value = body; if (rt) startReply(rt); alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
 };
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
 const KEY_CHANGED = 'Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nНадёжнее сначала сверить код безопасности (кнопка «🔒 Код безопасности»). Нажмите «ОК», только если уверены, что это действительно собеседник: новый ключ будет принят.';
-async function encryptForPeer(pt) {
-  try { return await E2E.encryptDM(peerId, pt); }
+async function encryptForPeer(pt, peer = peerId) {
+  try { return await E2E.encryptDM(peer, pt); }
   catch (e) {
     if (!(e instanceof E2E.KeyChange)) throw e;
     if (!confirm(KEY_CHANGED)) throw userErr('Не отправлено: ключ собеседника изменился.');
-    await E2E.acceptKeys(e.userId); return E2E.encryptDM(peerId, pt);
+    await E2E.acceptKeys(e.userId); return E2E.encryptDM(peer, pt);
   }
 }
 async function insertEncrypted(row, pt) {
@@ -502,33 +835,34 @@ async function insertEncrypted(row, pt) {
 }
 const NO_PLAIN = ' Сайт никогда не отправляет сообщения без сквозного шифрования.';
 /** Отправка только шифротекстом. Нет своих ключей — сначала регистрируем устройство; нет ключей у собеседника — понятная ошибка. */
-async function sendPayload(chat, pt) {
+async function chatPeer(chat) {
+  if (currentChat && chat.id === currentChat.id && peerId) return peerId;
+  if (chat.peer) return chat.peer;
+  const { data } = await sb.from('chat_members').select('user_id').eq('chat_id', chat.id).neq('user_id', me.id).limit(1).maybeSingle();
+  return data ? data.user_id : null;
+}
+async function sendPayload(chat, pt, extra) {
   if (!(await e2eStart())) throw userErr('Сообщение не отправлено: шифрование на этом устройстве не запустилось (' + ruErr(e2eErr) + '). Обновите страницу (Ctrl+F5).');
   try { await E2E.checkDevice(); } catch (e) { throw userErr('Сообщение не отправлено: не удалось зарегистрировать ключи этого устройства (' + ruErr(e) + ').'); }
   if (chat.kind === 'direct') {
-    if (!peerId) throw userErr('Сообщение не отправлено: не удалось определить собеседника.');
-    if (!(await E2E.peerHasKeys(peerId))) throw userErr('Сообщение не отправлено: у собеседника нет ключей шифрования — он ещё не входил в обновлённое приложение или на сайт. Попросите его войти, затем повторите.' + NO_PLAIN);
-    const r = await encryptForPeer(pt);
+    const peer = await chatPeer(chat);
+    if (!peer) throw userErr('Сообщение не отправлено: не удалось определить собеседника.');
+    if (!(await E2E.peerHasKeys(peer))) throw userErr('Сообщение не отправлено: у собеседника нет ключей шифрования — он ещё не входил в обновлённое приложение или на сайт. Попросите его войти, затем повторите.' + NO_PLAIN);
+    const r = await encryptForPeer(pt, peer);
     if (!r) throw userErr('Сообщение не отправлено: у собеседника больше нет ключей шифрования.' + NO_PLAIN);
-    return insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct }, r.pt);
+    return insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct, ...(extra || {}) }, r.pt);
   }
   for (let attempt = 0; attempt < 3; attempt++) {
     const { epoch, others } = await E2E.distribute(chat.id);
     if (!others) throw userErr('Сообщение не отправлено: ни у кого из участников группы нет ключей шифрования.' + NO_PLAIN);
     const r = await E2E.encryptGroup(chat.id, epoch, pt);
-    try { return await insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct, key_epoch: epoch, sender_device: E2E.deviceId() }, r.pt); }
+    try { return await insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct, key_epoch: epoch, sender_device: E2E.deviceId(), ...(extra || {}) }, r.pt); }
     catch (e) { if (!String(e && e.message).includes('stale key epoch')) throw e; }
   }
   throw userErr('Сообщение не отправлено: ключ группы меняется слишком часто, попробуйте ещё раз.');
 }
 
 // ---------- правка зашифрованных сообщений (RPC edit_message, как в Android) ----------
-async function editMsg(m, oldText) {
-  const t = prompt('Изменить сообщение', oldText);
-  if (t == null || !t.trim() || t.trim() === oldText) return;
-  try { await editEncrypted(m, JSON.stringify({ v: 1, t: t.trim() })); }
-  catch (e) { alert(e.userMsg || ruErr(e)); }
-}
 async function editEncrypted(m, pt) {
   if (!(await e2eStart())) throw userErr('Шифрование на этом устройстве не запустилось — правка невозможна.');
   if (m.ciphertext.sk !== undefined) {
@@ -565,28 +899,33 @@ $('fileInput').onchange = async () => {
   catch (e) { alert(e.userMsg || ruErr(e)); }
   finally { btn.disabled = false; txt(btn, '📎'); }
 };
-async function sendFile(chat, file) {
+async function sendFile(chat, file, extra, caption) {
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
-  if (chat.kind === 'direct' && !(peerId && await E2E.peerHasKeys(peerId))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
+  const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
+  if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
   const plain = new Uint8Array(await file.arrayBuffer());
   const enc = await E2E.encryptFile(plain);
   const path = `chat/${chat.id}/${crypto.randomUUID()}_file.bin`;
   const { error } = await sb.storage.from('chat-files').upload(path, new Blob([enc.ct], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: false });
   if (error) throw error;
   const f = { p: path, n: safeName(file.name), s: plain.length, m: file.type || '', k: enc.k, iv: enc.iv, h: enc.h };
-  try { await sendPayload(chat, JSON.stringify({ v: 1, t: '', f })); }
+  try { await sendPayload(chat, JSON.stringify({ v: 1, t: caption || '', f }), extra); }
   catch (e) { await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e; }
 }
-async function downloadFile(f, fromOther) {
-  const name = safeName(f.n);
-  if (fromOther && RISKY.some(x => name.toLowerCase().endsWith('.' + x)) && !confirm(`«${name}» может быть опасным файлом. Скачать?`)) return;
+async function fetchFilePlain(f) {
   const { data, error } = await sb.storage.from('chat-files').createSignedUrl(f.p, 60);
   if (error) throw error;
   const r = await fetch(data.signedUrl);
   if (!r.ok) throw userErr('Скачивание не удалось');
   const ct = new Uint8Array(await r.arrayBuffer());
   if (ct.length > MAX_FILE + 16) throw userErr('Файл слишком большой');
-  const plain = await E2E.decryptFile(ct, f.k, f.iv, f.h);
+  if (!(await e2eStart())) throw userErr('Шифрование на этом устройстве не запустилось — файл не расшифровать.');
+  return E2E.decryptFile(ct, f.k, f.iv, f.h);
+}
+async function downloadFile(f, fromOther) {
+  const name = safeName(f.n);
+  if (fromOther && RISKY.some(x => name.toLowerCase().endsWith('.' + x)) && !confirm(`«${name}» может быть опасным файлом. Скачать?`)) return;
+  const plain = await fetchFilePlain(f);
   const url = URL.createObjectURL(new Blob([plain], { type: 'application/octet-stream' })); // octet-stream: браузер сохраняет файл, а не открывает его
   const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
@@ -663,6 +1002,7 @@ $('peerBtn').onclick = async () => {
   $('peerDlg').showModal();
 };
 $('closePeer').onclick = () => $('peerDlg').close();
+$('chatMenuBtn').onclick = e => { if (!currentChat) return; const r = e.currentTarget.getBoundingClientRect(); openMenu({ clientX: r.right - 220, clientY: r.bottom + 4 }, chatMenuItems(currentChat)); };
 
 // ---------- настройки и профиль ----------
 const THEMES = { system: null, dark: 'dark', light: 'light' };
@@ -686,7 +1026,8 @@ function openSettings(push = true, which = 'settings') {
   setNav(which);
   if (push && location.hash !== '#' + which) history.pushState({ v: which }, '', '#' + which);
   if (which === 'profile') fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
-  else { txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—'); }
+  else { getProfile(me.id, true).then(p => paintSeenSeg((p && p.last_seen_visibility) || 'everyone'));
+    txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—'); }
 }
 function closeSettings() { $('app').classList.remove('in-settings'); setNav('chats'); maybeMarkRead(); }
 document.querySelectorAll('#bottomNav button').forEach(b => {
@@ -795,7 +1136,7 @@ async function onSession(session) {
   $('auth').hidden = !!me; $('app').hidden = !me;
   if (me) {
     stopQr();
-    refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles();
+    refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
     { const m = /^#(profile|settings)$/.exec(location.hash); if (m) openSettings(false, m[1]); else setNav('chats'); }
     e2eStart().then(() => deviceCheck(true));
     loadChats();
