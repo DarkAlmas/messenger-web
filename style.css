@@ -39,3 +39,4 @@ button:disabled{opacity:.6;cursor:default}
 #qrTimerText{min-height:1.3em;margin:4px 0}
 #qrRetry[hidden]{display:inline-block;visibility:hidden}
 #authMsg{min-height:2.6em}
+.msg .okE2e { display: block; font-size: .75em; color: #5fb878; font-style: normal; margin-top: 2px; }

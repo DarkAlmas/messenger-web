@@ -1,5 +1,5 @@
 const C = window.MSG_CONFIG;
-const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: true, detectSessionInUrl: false } });
+const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: true, storage: window.sessionStorage, storageKey: 'msgr-auth', autoRefreshToken: true, detectSessionInUrl: false } });
 const $ = id => document.getElementById(id);
 let me = null, regMode = false, currentChat = null, chan = null, qrTimer = null;
 const names = {};
@@ -74,7 +74,9 @@ setInterval(async () => {
   if (!$('authMsg').textContent.startsWith(NET_ERR) && !$('qrStatus').textContent.startsWith('Нет соединения')) return;
   try { const r = await fetch(`${C.SUPABASE_URL}/auth/v1/health`, { headers: { apikey: C.SUPABASE_KEY }, cache: 'no-store' }); if (r.status < 500) netBack(); } catch (e) { /* всё ещё нет сети */ }
 }, 5000);
-$('logout').onclick = async () => { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } };
+$('logout').onclick = async () => {
+  try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } };
 
 // ---------- вход по QR ----------
 const QR_TEXT = 'Откройте приложение на телефоне: меню ⋮ → «Войти на сайте (QR)» и отсканируйте код. Входите только если сами только что открыли этот QR.';
@@ -173,7 +175,35 @@ async function nameOf(id) {
   const { data } = await sb.from('profiles').select('username, display_name').eq('id', id).maybeSingle();
   return (names[id] = data ? ((data.display_name && data.display_name !== data.username) ? data.display_name + ' @' + data.username : '@' + data.username) : 'неизвестный');
 }
-let chatHasE2e = false;
+let chatHasE2e = false, peerId = null;
+// ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
+let E2E = null, e2eErr = null;
+const e2eMod = import('./e2e.js').then(m => { m.init(sb); return (E2E = m); });
+async function e2eStart() {
+  try { const m = await e2eMod; await m.ensureReady(); e2eErr = null; }
+  catch (e) { e2eErr = e; console.warn('E2E недоступно:', e); }
+  return E2E && !e2eErr;
+}
+const sentOwn = {}; // подпись шифротекста → открытый текст (своё сообщение приходит по Realtime раньше, чем сохранится копия)
+const ctSig = m => m.ciphertext && (m.ciphertext.sk || Object.values(m.ciphertext).map(x => x && x.b).sort()[0]);
+function payloadText(pt) {
+  let o; try { o = JSON.parse(pt); } catch { return pt; }
+  if (!o || typeof o !== 'object') return pt;
+  return (o.t || '') + (o.f ? (o.t ? '\n' : '') + '📎 Файл — откройте в приложении' : '');
+}
+async function decryptText(m) {
+  const sig = ctSig(m);
+  if (sig && sentOwn[sig]) return payloadText(sentOwn[sig]);
+  if (!(await e2eStart())) return null;
+  try {
+    if (m.ciphertext.sk !== undefined) {
+      try { return payloadText(await E2E.decryptGroup(m.chat_id, m)); }
+      catch (e) { if (!(e instanceof Error) || !(e instanceof E2E.NoKey)) throw e; await E2E.receive(m.chat_id); return payloadText(await E2E.decryptGroup(m.chat_id, m)); }
+    }
+    const pt = await E2E.decryptDM(m);
+    return pt == null ? { other: true } : payloadText(pt);
+  } catch (e) { console.warn('decrypt', m.id, e); return { fail: true }; }
+}
 async function addMsg(m) {
   const d = document.createElement('div');
   d.className = 'msg' + (m.sender_id === me.id ? ' mine' : '');
@@ -181,7 +211,12 @@ async function addMsg(m) {
   txt(small, m.sender_id ? await nameOf(m.sender_id) : 'удалённый аккаунт');
   const b = document.createElement('span');
   let warn = null;
-  if (m.ciphertext) { chatHasE2e = true; b.className = 'e2e'; txt(b, '🔒 зашифровано, откройте в приложении'); }
+  if (m.ciphertext) {
+    chatHasE2e = true;
+    const t = await decryptText(m);
+    if (typeof t === 'string') { txt(b, t); warn = document.createElement('em'); warn.className = 'okE2e'; txt(warn, '🔒 сквозное шифрование'); }
+    else { b.className = 'e2e'; txt(b, t && t.other ? '🔒 зашифровано для другого устройства' : t && t.fail ? '🔒 не удалось расшифровать' : '🔒 зашифровано, откройте в приложении'); }
+  }
   else { txt(b, m.body); warn = document.createElement('em'); warn.className = 'noe2e'; txt(warn, '⚠ не зашифровано'); }
   d.append(small, b); if (warn) d.append(warn);
   const box = $('messages'); box.appendChild(d); box.scrollTop = box.scrollHeight;
@@ -189,8 +224,11 @@ async function addMsg(m) {
 async function openChat(c, li) {
   currentChat = c;
   document.querySelectorAll('#chatList li').forEach(x => x.classList.remove('active')); li.classList.add('active');
-  chatHasE2e = false;
-  txt($('chatTitle'), li.textContent + (c.kind === 'direct' ? ' · с сайта — без сквозного шифрования' : '')); $('sendForm').hidden = false; $('messages').innerHTML = '';
+  chatHasE2e = false; peerId = null;
+  txt($('chatTitle'), li.textContent); $('sendForm').hidden = false; $('messages').innerHTML = '';
+  if (c.kind === 'direct') { const { data: pm } = await sb.from('chat_members').select('user_id').eq('chat_id', c.id).neq('user_id', me.id).limit(1).maybeSingle(); peerId = pm ? pm.user_id : null; }
+  else if (await e2eStart()) { try { await E2E.receive(c.id); } catch (e) { console.warn(e); } }
+  if (currentChat !== c) return;
   const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at').limit(200);
   for (const m of data || []) await addMsg(m);
   if (chan) sb.removeChannel(chan);
@@ -201,11 +239,45 @@ async function openChat(c, li) {
 $('sendForm').onsubmit = async e => {
   e.preventDefault();
   const body = $('msgInput').value.trim(); if (!body || !currentChat) return;
-  // Сайт пока не умеет E2E: не понижаем защиту молча
-  if (currentChat.kind === 'direct' && chatHasE2e && !confirm('Этот чат зашифрован на телефонах, а сайт пока не умеет шифровать. Отправить сообщение БЕЗ сквозного шифрования?')) return;
+  const chat = currentChat;
   $('msgInput').value = '';
-  const { error } = await sb.from('messages').insert({ chat_id: currentChat.id, sender_id: me.id, body });
-  if (error) { $('msgInput').value = body; alert(ruErr(error)); }
+  try { await sendText(chat, body); }
+  catch (err) { $('msgInput').value = body; alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
+};
+function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
+async function insertEncrypted(row, pt) {
+  const sig = row.ciphertext.sk || Object.values(row.ciphertext).map(x => x.b).sort()[0];
+  sentOwn[sig] = pt;
+  const { data, error } = await sb.from('messages').insert(row).select('id').single();
+  if (error) { delete sentOwn[sig]; throw error; }
+  await E2E.rememberOwn(data.id, pt, row.ciphertext.sk);
+}
+async function sendText(chat, body) {
+  const ok = await e2eStart();
+  if (chat.kind === 'direct' && peerId) {
+    if (ok && await E2E.peerHasKeys(peerId)) {
+      let r;
+      try { r = await E2E.encryptDM(peerId, body); }
+      catch (e) {
+        if (!(e instanceof E2E.KeyChange)) throw e;
+        if (!confirm('Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nЕсли вы уверены, что это действительно собеседник (лучше сверить код безопасности в приложении), нажмите «ОК», чтобы принять новый ключ и отправить.')) throw userErr('Сообщение не отправлено: ключ собеседника изменился.');
+        await E2E.acceptKeys(e.userId); r = await E2E.encryptDM(peerId, body);
+      }
+      if (!r) throw userErr('У собеседника больше нет ключей шифрования. Сообщение не отправлено, попробуйте ещё раз.');
+      return insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct }, r.pt);
+    }
+    if (!ok && !confirm('Шифрование на этом устройстве не запустилось. Отправить сообщение БЕЗ сквозного шифрования?')) throw userErr('Сообщение не отправлено.');
+  } else if (chat.kind === 'group' && ok) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { epoch, others } = await E2E.distribute(chat.id);
+      if (!others) break; // ни у кого из участников нет ключей — открытый текст с пометкой
+      const r = await E2E.encryptGroup(chat.id, epoch, body);
+      try { return await insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct, key_epoch: epoch, sender_device: E2E.deviceId() }, r.pt); }
+      catch (e) { if (!String(e && e.message).includes('stale key epoch')) throw e; }
+    }
+  }
+  const { error } = await sb.from('messages').insert({ chat_id: chat.id, sender_id: me.id, body });
+  if (error) throw error;
 };
 $('newDirect').onclick = async () => {
   const nick = normNick($('findUser').value); if (!nick) return;
@@ -227,6 +299,7 @@ async function onSession(session) {
   if (me) {
     stopQr();
     txt($('me'), await nameOf(me.id));
+    e2eStart();
     loadChats();
   } else { qrFails = 0; startQr(); }
 }
