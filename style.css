@@ -20,3 +20,4 @@ main{display:flex;flex-direction:column;min-height:0}
 .msg.mine{align-self:flex-end;background:#2b5278}
 .msg small{display:block;color:#8ea0b3;font-size:11px}
 #sendForm{display:flex;gap:6px;padding:10px;border-top:1px solid #22303f}#sendForm input{margin:0}
+.msg .e2e { font-style: italic; opacity: .75; }

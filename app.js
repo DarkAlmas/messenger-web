@@ -82,19 +82,23 @@ async function nameOf(id) {
   const { data } = await sb.from('profiles').select('username, display_name').eq('id', id).maybeSingle();
   return (names[id] = data ? ((data.display_name && data.display_name !== data.username) ? data.display_name + ' @' + data.username : '@' + data.username) : 'неизвестный');
 }
+let chatHasE2e = false;
 async function addMsg(m) {
   const d = document.createElement('div');
   d.className = 'msg' + (m.sender_id === me.id ? ' mine' : '');
   const small = document.createElement('small');
   txt(small, m.sender_id ? await nameOf(m.sender_id) : 'удалённый аккаунт');
-  const b = document.createElement('span'); txt(b, m.body);
+  const b = document.createElement('span');
+  if (m.ciphertext && !m.body) { chatHasE2e = true; b.className = 'e2e'; txt(b, '🔒 Зашифровано — откройте на телефоне'); }
+  else txt(b, m.body);
   d.append(small, b);
   const box = $('messages'); box.appendChild(d); box.scrollTop = box.scrollHeight;
 }
 async function openChat(c, li) {
   currentChat = c;
   document.querySelectorAll('#chatList li').forEach(x => x.classList.remove('active')); li.classList.add('active');
-  txt($('chatTitle'), li.textContent); $('sendForm').hidden = false; $('messages').innerHTML = '';
+  chatHasE2e = false;
+  txt($('chatTitle'), li.textContent + (c.kind === 'direct' ? ' · с сайта — без сквозного шифрования' : '')); $('sendForm').hidden = false; $('messages').innerHTML = '';
   const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at').limit(200);
   for (const m of data || []) await addMsg(m);
   if (chan) sb.removeChannel(chan);
@@ -105,6 +109,8 @@ async function openChat(c, li) {
 $('sendForm').onsubmit = async e => {
   e.preventDefault();
   const body = $('msgInput').value.trim(); if (!body || !currentChat) return;
+  // Сайт пока не умеет E2E: не понижаем защиту молча
+  if (currentChat.kind === 'direct' && chatHasE2e && !confirm('Этот чат зашифрован на телефонах, а сайт пока не умеет шифровать. Отправить сообщение БЕЗ сквозного шифрования?')) return;
   $('msgInput').value = '';
   const { error } = await sb.from('messages').insert({ chat_id: currentChat.id, sender_id: me.id, body });
   if (error) alert(error.message);
