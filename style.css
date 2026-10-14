@@ -1,6 +1,6 @@
 /* Мессенджер: mobile-first, тёмная и светлая темы */
-:root,[data-theme=dark]{--bg:#0f1720;--panel:#16202b;--panel2:#1d2935;--line:#243241;--text:#e8eef5;--muted:#8ea0b3;--accent:#3b8beb;--accent-text:#fff;--in:#1f2c3a;--out:#2b5a8a;--out-text:#fff;--danger:#e5484d;--ok:#46b86b;--warn:#d99a26;--shadow:0 6px 24px #0006;color-scheme:dark}
-[data-theme=light]{--bg:#eef2f6;--panel:#fff;--panel2:#f4f7fa;--line:#dde4ec;--text:#16202b;--muted:#617385;--accent:#2b7cd3;--accent-text:#fff;--in:#fff;--out:#d6ebff;--out-text:#0f2236;--danger:#d13438;--ok:#2e8b4f;--warn:#a96a00;--shadow:0 6px 24px #0f172a22;color-scheme:light}
+:root,html[data-theme=dark]{--bg:#0f1720;--panel:#16202b;--panel2:#1d2935;--line:#243241;--text:#e8eef5;--muted:#8ea0b3;--accent:#3b8beb;--accent-text:#fff;--in:#1f2c3a;--out:#2b5a8a;--out-text:#fff;--danger:#e5484d;--ok:#46b86b;--warn:#d99a26;--shadow:0 6px 24px #0006;color-scheme:dark}
+html[data-theme=light]{--bg:#eef2f6;--panel:#fff;--panel2:#f4f7fa;--line:#dde4ec;--text:#16202b;--muted:#617385;--accent:#2b7cd3;--accent-text:#fff;--in:#fff;--out:#d6ebff;--out-text:#0f2236;--danger:#d13438;--ok:#2e8b4f;--warn:#a96a00;--shadow:0 6px 24px #0f172a22;color-scheme:light}
 @media(prefers-color-scheme:light){:root:not([data-theme]){--bg:#eef2f6;--panel:#fff;--panel2:#f4f7fa;--line:#dde4ec;--text:#16202b;--muted:#617385;--accent:#2b7cd3;--in:#fff;--out:#d6ebff;--out-text:#0f2236;--danger:#d13438;--ok:#2e8b4f;--warn:#a96a00;--shadow:0 6px 24px #0f172a22;color-scheme:light}}
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -71,12 +71,12 @@ li.active .badge{background:var(--accent-text);color:var(--accent)}
 .msg.mine small{display:none}.msg.mine small:has(.edit){display:none}
 .msg .foot{display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:11px;opacity:.7;margin-top:2px;white-space:nowrap}
 .msg .ticks{font-size:12px;letter-spacing:-3px;padding-right:3px}.msg .ticks.read{color:#4fc3f7;opacity:1}
-[data-theme=light] .msg .ticks.read{color:#1a73e8}
+html[data-theme=light] .msg .ticks.read{color:#1a73e8}
 .msg .e2e{font-style:italic;opacity:.75}
 .msg .noe2e{color:var(--warn)}.msg .lock{opacity:.8}
 .msg .edit{background:none;padding:0 2px;min-height:0;color:inherit;font-size:12px;opacity:.8}
 .msg .file{display:flex;align-items:center;gap:8px;margin:4px 0;background:#0002;color:inherit;border-radius:12px;padding:8px 12px;text-align:left;max-width:100%}
-[data-theme=light] .msg .file{background:#0000000d}
+html[data-theme=light] .msg .file{background:#0000000d}
 #sendForm{display:flex;align-items:center;gap:6px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--panel)}
 #sendForm input{margin:0;border-radius:22px}#sendBtn{width:44px;height:44px;border-radius:50%;padding:0;font-size:18px;flex:none}
 /* настройки */
