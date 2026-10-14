@@ -37,6 +37,7 @@ button:disabled{opacity:.6;cursor:default}
 #auth .card{min-height:620px;box-sizing:border-box}
 #qrStatus{min-height:3.6em;margin:8px 0 0}
 #qrTimerText{min-height:1.3em;margin:4px 0}
-#qrRetry[hidden]{display:inline-block;visibility:hidden}
+#qrRetry[hidden]{display:inline-block!important;visibility:hidden}
 #authMsg{min-height:2.6em}
 .msg .okE2e { display: block; font-size: .75em; color: #5fb878; font-style: normal; margin-top: 2px; }
+@media(max-width:640px){#qrStatus{min-height:8em}}
