@@ -231,8 +231,8 @@ button{border-radius:var(--radius-button)}
 #chatPane,#chatHead,.peer{min-width:0}
 @media(max-width:600px){#safetyBtn{max-width:20px;overflow:hidden;white-space:nowrap;flex:none}}
 .msg .foot:has(.reacts){flex-wrap:wrap;white-space:normal}
-.msg .foot .reacts{display:inline-flex;flex-wrap:wrap;gap:4px;margin-right:auto;padding-right:4px}
-.msg .react{font:inherit;font-size:13px;line-height:1;padding:3px 7px;border-radius:999px;cursor:pointer;color:var(--bubble-in-text,inherit);background:color-mix(in srgb,var(--color-primary) 12%,transparent);border:1px solid transparent}
+.msg .foot .reacts{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;margin-right:auto;padding-right:4px}
+.msg .react{display:inline-flex;align-items:center;height:22px;box-sizing:border-box;font:inherit;font-size:13px;line-height:1;padding:0 7px;min-width:0;min-height:0;border-radius:999px;cursor:pointer;color:var(--bubble-in-text,inherit);background:color-mix(in srgb,var(--color-primary) 12%,transparent);border:1px solid transparent}
 .msg .react.mine{background:color-mix(in srgb,var(--color-primary) 22%,transparent);border-color:color-mix(in srgb,var(--color-primary) 55%,transparent)}
 .msg.mine .react{color:var(--bubble-out-text);background:rgba(255,255,255,.18);border-color:transparent}
 .msg.mine .react.mine{border-color:rgba(255,255,255,.5)}
