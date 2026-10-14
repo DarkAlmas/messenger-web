@@ -1,7 +1,7 @@
 // Сквозное шифрование на сайте: официальный libsignal (Rust), собранный в WASM (vendor/sigwasm).
 // Протокол и формат — как в Android-клиенте (E2eCore/E2eGroup): X3DH/PQXDH + Double Ratchet, Kyber-1024, Sender Keys.
 // Своей криптографии здесь нет.
-import initWasm, { Store, distId } from './vendor/sigwasm/sigwasm.js';
+import initWasm, { Store, distId, compareScannable } from './vendor/sigwasm/sigwasm.js';
 
 const OTK_BATCH = 100, OTK_LOW = 20, CLAIM_TTL = 10 * 60 * 1000;
 let sb, store = null, kv = {}, db, uid = null, ready = null;
@@ -15,14 +15,34 @@ function idb() {
 }
 function tx(mode, fn) { return new Promise((res, rej) => { const t = db.transaction('kv', mode); const s = t.objectStore('kv'); const out = fn(s); t.oncomplete = () => res(out && out.result); t.onerror = () => rej(t.error); }); }
 async function loadAll() { const out = {}; await new Promise((res, rej) => { const c = db.transaction('kv').objectStore('kv').openCursor(); c.onsuccess = () => { const x = c.result; if (!x) return res(); out[x.key] = x.value; x.continue(); }; c.onerror = () => rej(c.error); }); return out; }
-async function put(k, v) { kv[k] = v; await tx('readwrite', s => s.put(v, k)); }
-async function del(k) { delete kv[k]; await tx('readwrite', s => s.delete(k)); }
+let dirty = false, ver = null;
+async function put(k, v) { kv[k] = v; dirty = true; await tx('readwrite', s => s.put(v, k)); }
+async function del(k) { delete kv[k]; dirty = true; await tx('readwrite', s => s.delete(k)); }
 async function saveStore() { await put('state', store.export()); }
 const jget = k => { try { return kv[k] ? JSON.parse(kv[k]) : {}; } catch { return {}; } };
 
 // Все операции с хранилищем строго по очереди (ratchet нельзя продвигать параллельно)
+// Между вкладками — Web Locks: одно хранилище IndexedDB, ratchet продвигает только одна вкладка за раз.
+// Перед операцией, если другая вкладка что-то записала (ключ 'ver'), перечитываем состояние.
 let chain = Promise.resolve();
-const locked = fn => { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p; };
+async function syncFromDb() {
+  if (!db) return;
+  const v = await tx('readonly', s => s.get('ver'));
+  if (v === ver) return;
+  kv = await loadAll(); ver = v;
+  if (!kv.dev) ready = null; // другая вкладка вышла из аккаунта
+  if (store) { store.free(); store = null; }
+  if (kv.state) store = Store.load(kv.state);
+}
+async function runLocked(fn) {
+  await syncFromDb(); dirty = false;
+  try { return await fn(); }
+  finally { if (dirty && db) { ver = Math.random().toString(36).slice(2); kv.ver = ver; await tx('readwrite', s => s.put(ver, 'ver')); dirty = false; } }
+}
+const locked = fn => {
+  const run = () => navigator.locks ? navigator.locks.request('msgr-e2e', () => runLocked(fn)) : runLocked(fn);
+  const p = chain.then(run, run); chain = p.catch(() => {}); return p;
+};
 
 function sessionId(jwt) { const p = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(decodeURIComponent(escape(atob(p)))).session_id; }
 async function token() { const { data } = await sb.auth.getSession(); if (!data.session) throw new Error('нет сессии'); return data.session; }
@@ -35,8 +55,7 @@ export function init(client) { sb = client; }
 export function ensureReady() {
   if (!ready) ready = locked(async () => {
     await initWasm({ module_or_path: new URL('./vendor/sigwasm/sigwasm_bg.wasm', import.meta.url) });
-    db = db || await idb();
-    kv = await loadAll();
+    if (!db) { db = await idb(); await syncFromDb(); }
     const s = await token(); uid = s.user.id;
     const dev = sessionId(s.access_token);
     if (kv.dev !== dev || kv.uid !== uid || !kv.state) {
@@ -105,10 +124,7 @@ export const hasPendingChange = user => !!kv['pending:' + user];
 /** Принять новые ключи собеседника (как acceptKeys в Android). */
 export function acceptKeys(user) {
   return locked(async () => {
-    const trust = jget('trust:' + user), pending = jget('pending:' + user);
-    for (const [d, ik] of Object.entries(pending)) { trust[d] = ik; store.deleteSession(d); }
-    await put('trust:' + user, JSON.stringify(trust)); await del('pending:' + user); if (kv['verified:' + user]) await del('verified:' + user);
-    delete claimedAt[user]; await saveStore();
+    await acceptPendingInner(user); if (kv['verified:' + user]) await del('verified:' + user);
   });
 }
 
@@ -118,13 +134,13 @@ export function peerHasKeys(peer) {
 }
 
 /** Шифротекст {device: {f,t,b}} для устройств собеседника и своих других устройств; null — у собеседника нет ключей. */
-export function encryptDM(peer, text) {
+export function encryptDM(peer, pt) {
   return locked(async () => {
     const peerDevs = await devicesFor(peer);
     if (!peerDevs.length) return null;
     const all = [...peerDevs];
     try { for (const d of await devicesFor(uid)) if (!all.includes(d)) all.push(d); } catch (e) { if (e.userId === uid) throw e; }
-    const pt = JSON.stringify({ v: 1, t: text }), ct = {};
+    const ct = {};
     for (const d of all) { const m = JSON.parse(store.encrypt(d, pt)); ct[d] = { f: kv.dev, t: m.t, b: m.b }; }
     await saveStore();
     return { ct, pt };
@@ -241,12 +257,60 @@ export function decryptGroup(chat, m) {
   });
 }
 
-export function encryptGroup(chat, epoch, text) {
-  return locked(async () => { const pt = JSON.stringify({ v: 1, t: text }); const sk = store.groupEncrypt(kv.dev, chat, epoch, pt); await saveStore(); return { ct: { sk }, pt }; });
+export function encryptGroup(chat, epoch, pt) {
+  return locked(async () => { const sk = store.groupEncrypt(kv.dev, chat, epoch, pt); await saveStore(); return { ct: { sk }, pt }; });
+}
+
+// ---------- код безопасности (libsignal Fingerprint v2, 5200 итераций — как Android) ----------
+/** [{dev, digits, qr}] по доверенным (и ожидающим) устройствам собеседника. */
+export function safetyNumbers(peer) {
+  return locked(async () => {
+    const t = { ...jget('trust:' + peer), ...jget('pending:' + peer) };
+    return Object.entries(t).map(([dev, ik]) => ({ dev, ...JSON.parse(store.fingerprint(uid, peer, ik)) }));
+  });
+}
+/** Сравнивает отсканированный QR (base64-строка из QR приложения) с нашими кодами; при совпадении — проверено. */
+export function verifyScanned(peer, scanned) {
+  return locked(async () => {
+    const t = { ...jget('trust:' + peer), ...jget('pending:' + peer) };
+    for (const ik of Object.values(t)) {
+      const mine = JSON.parse(store.fingerprint(uid, peer, ik)).qr;
+      let ok = false; try { ok = compareScannable(mine, scanned.trim()); } catch { /* не тот формат */ }
+      if (ok) { await acceptPendingInner(peer); await put('verified:' + peer, kv['trust:' + peer]); return true; }
+    }
+    return false;
+  });
+}
+/** Пользователь сам сравнил цифры и подтвердил совпадение. */
+export function markVerified(peer) { return locked(async () => { await acceptPendingInner(peer); await put('verified:' + peer, kv['trust:' + peer] || '{}'); }); }
+export const isVerified = peer => kv['verified:' + peer] != null && kv['verified:' + peer] === kv['trust:' + peer];
+async function acceptPendingInner(user) {
+  if (!kv['pending:' + user]) return;
+  const trust = jget('trust:' + user), pending = jget('pending:' + user);
+  for (const [d, ik] of Object.entries(pending)) { trust[d] = ik; store.deleteSession(d); }
+  await put('trust:' + user, JSON.stringify(trust)); await del('pending:' + user);
+  delete claimedAt[user]; await saveStore();
+}
+
+// ---------- файлы: AES-256-GCM, как E2eCore.encryptFile (ct||tag, ключ 32 байта, IV 12 байт, sha256 hex) ----------
+const b64e = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+export async function encryptFile(plain) {
+  const key = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, k, plain));
+  return { ct, k: b64e(key), iv: b64e(iv), h: hex(await crypto.subtle.digest('SHA-256', plain)) };
+}
+export async function decryptFile(ct, kB64, ivB64, h) {
+  const k = await crypto.subtle.importKey('raw', b64d(kB64), 'AES-GCM', false, ['decrypt']);
+  const p = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(ivB64), tagLength: 128 }, k, ct));
+  if (h && hex(await crypto.subtle.digest('SHA-256', p)) !== h) throw new Error('Файл повреждён: контрольная сумма не совпала');
+  return p;
 }
 
 /** Выход: стереть ключи этого устройства. */
 export function wipe() {
-  return locked(async () => { ready = null; store = null; if (!db) return; for (const k of Object.keys(kv)) await del(k); });
+  return locked(async () => { ready = null; if (store) { store.free(); store = null; } if (!db) return; for (const k of Object.keys(kv)) if (k !== 'ver') await del(k); });
 }
 export { distId };

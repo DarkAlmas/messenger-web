@@ -41,3 +41,15 @@ button:disabled{opacity:.6;cursor:default}
 #authMsg{min-height:2.6em}
 .msg .okE2e { display: block; font-size: .75em; color: #5fb878; font-style: normal; margin-top: 2px; }
 @media(max-width:640px){#qrStatus{min-height:8em}}
+#chatHead{align-items:center;gap:8px}#chatHead .link{padding:0;white-space:nowrap}
+.msg .edit{background:none;padding:0 0 0 6px;color:#8ea0b3;font-size:12px}
+.msg .file{display:inline-block;margin-top:4px;background:#1b3a5a}
+.msg .edited{color:#8ea0b3;font-size:11px;margin-left:6px}
+#attachBtn{padding:10px}
+dialog{background:#17212b;color:inherit;border:1px solid #2b3a4a;border-radius:14px;max-width:440px;width:92vw}
+dialog::backdrop{background:#0008}
+.fp{font-family:ui-monospace,monospace;font-size:18px;text-align:center;white-space:pre;margin:8px 0}
+.fpqr{background:#fff;padding:10px;border-radius:10px;width:fit-content;margin:0 auto}.fpqr svg{width:200px;height:200px;display:block}
+.dlg-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+#scanVideo{width:100%;border-radius:8px;margin-top:6px}
+.ok{color:#5fb878}.bad{color:#e57373}

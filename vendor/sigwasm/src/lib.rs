@@ -301,4 +301,21 @@ impl Store {
         let pt = sync(group_decrypt(&raw, &mut self.d, &addr(from))).map_err(e)?;
         String::from_utf8(pt).map_err(e)
     }
+
+    /// Код безопасности как NumericFingerprintGenerator(5200).createFor(2, uuid(me), myIdentity, uuid(peer), peerIdentity):
+    /// {"digits": "...60 цифр", "qr": base64(scannable)}.
+    pub fn fingerprint(&self, my_uuid: &str, peer_uuid: &str, peer_identity_b64: &str) -> R<String> {
+        let idk = IdentityKeyPair::try_from(&self.d.idk[..]).map_err(e)?;
+        let u = |x: &str| -> R<Vec<u8>> { Ok(uuid::Uuid::parse_str(x).map_err(e)?.as_bytes().to_vec()) };
+        let peer = IdentityKey::decode(&unb64(peer_identity_b64)?).map_err(e)?;
+        let f = Fingerprint::new(2, 5200, &u(my_uuid)?, idk.identity_key(), &u(peer_uuid)?, &peer).map_err(e)?;
+        Ok(json!({"digits": f.display_string().map_err(e)?, "qr": b64(&f.scannable.serialize().map_err(e)?)}).to_string())
+    }
+}
+
+/// Сравнение своего scannable (base64) с отсканированным у собеседника (base64), как ScannableFingerprint.compareTo.
+#[wasm_bindgen(js_name = compareScannable)]
+pub fn compare_scannable(mine_b64: &str, scanned_b64: &str) -> R<bool> {
+    let mine = libsignal_protocol::ScannableFingerprint::deserialize(&unb64(mine_b64)?).map_err(e)?;
+    mine.compare(&unb64(scanned_b64)?).map_err(e)
 }

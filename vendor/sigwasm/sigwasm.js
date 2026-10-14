@@ -105,6 +105,30 @@ function passStringToWasm0(arg, malloc, realloc) {
     WASM_VECTOR_LEN = offset;
     return ptr;
 }
+
+function takeFromExternrefTable0(idx) {
+    const value = wasm.__wbindgen_export_2.get(idx);
+    wasm.__externref_table_dealloc(idx);
+    return value;
+}
+/**
+ * Сравнение своего scannable (base64) с отсканированным у собеседника (base64), как ScannableFingerprint.compareTo.
+ * @param {string} mine_b64
+ * @param {string} scanned_b64
+ * @returns {boolean}
+ */
+export function compareScannable(mine_b64, scanned_b64) {
+    const ptr0 = passStringToWasm0(mine_b64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(scanned_b64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.compareScannable(ptr0, len0, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] !== 0;
+}
+
 /**
  * @param {string} chat
  * @param {number} epoch
@@ -123,12 +147,6 @@ export function distId(chat, epoch) {
     } finally {
         wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
-}
-
-function takeFromExternrefTable0(idx) {
-    const value = wasm.__wbindgen_export_2.get(idx);
-    wasm.__externref_table_dealloc(idx);
-    return value;
 }
 
 const StoreFinalization = (typeof FinalizationRegistry === 'undefined')
@@ -231,6 +249,38 @@ export class Store {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ret[0] !== 0;
+    }
+    /**
+     * Код безопасности как NumericFingerprintGenerator(5200).createFor(2, uuid(me), myIdentity, uuid(peer), peerIdentity):
+     * {"digits": "...60 цифр", "qr": base64(scannable)}.
+     * @param {string} my_uuid
+     * @param {string} peer_uuid
+     * @param {string} peer_identity_b64
+     * @returns {string}
+     */
+    fingerprint(my_uuid, peer_uuid, peer_identity_b64) {
+        let deferred5_0;
+        let deferred5_1;
+        try {
+            const ptr0 = passStringToWasm0(my_uuid, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(peer_uuid, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(peer_identity_b64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ret = wasm.store_fingerprint(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var ptr4 = ret[0];
+            var len4 = ret[1];
+            if (ret[3]) {
+                ptr4 = 0; len4 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred5_0 = ptr4;
+            deferred5_1 = len4;
+            return getStringFromWasm0(ptr4, len4);
+        } finally {
+            wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+        }
     }
     /**
      * Генерирует одноразовые prekey с id start..start+n, сохраняет локально; возвращает [{key_id,pub}].

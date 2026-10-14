@@ -1,6 +1,10 @@
 const C = window.MSG_CONFIG;
-const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: true, storage: window.sessionStorage, storageKey: 'msgr-auth', autoRefreshToken: true, detectSessionInUrl: false } });
+const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: true, storageKey: 'msgr-auth', autoRefreshToken: false, detectSessionInUrl: false } });
 const $ = id => document.getElementById(id);
+// Одна сессия (= одно устройство E2E) на браузер: сессия в localStorage, токен обновляет только одна вкладка-лидер.
+try { sessionStorage.removeItem('msgr-auth'); } catch (e) { /* старая версия хранила сессию во вкладке */ }
+if (navigator.locks) navigator.locks.request('msgr-auth-leader', () => { sb.auth.startAutoRefresh(); return new Promise(() => {}); });
+else sb.auth.startAutoRefresh();
 let me = null, regMode = false, currentChat = null, chan = null, qrTimer = null;
 const names = {};
 
@@ -185,48 +189,78 @@ async function e2eStart() {
   return E2E && !e2eErr;
 }
 const sentOwn = {}; // подпись шифротекста → открытый текст (своё сообщение приходит по Realtime раньше, чем сохранится копия)
-const ctSig = m => m.ciphertext && (m.ciphertext.sk || Object.values(m.ciphertext).map(x => x && x.b).sort()[0]);
-function payloadText(pt) {
-  let o; try { o = JSON.parse(pt); } catch { return pt; }
-  if (!o || typeof o !== 'object') return pt;
-  return (o.t || '') + (o.f ? (o.t ? '\n' : '') + '📎 Файл — откройте в приложении' : '');
+const ctSig = c => c && (c.sk || Object.values(c).map(x => x && x.b).sort()[0]);
+function parsePayload(pt) {
+  let o; try { o = JSON.parse(pt); } catch { return { t: pt }; }
+  if (!o || typeof o !== 'object') return { t: String(pt) };
+  return { t: o.t || '', f: o.f && typeof o.f === 'object' ? o.f : null };
 }
-async function decryptText(m) {
-  const sig = ctSig(m);
-  if (sig && sentOwn[sig]) return payloadText(sentOwn[sig]);
+async function decryptPayload(m) {
+  const sig = ctSig(m.ciphertext);
+  if (sig && sentOwn[sig]) return parsePayload(sentOwn[sig]);
   if (!(await e2eStart())) return null;
   try {
     if (m.ciphertext.sk !== undefined) {
-      try { return payloadText(await E2E.decryptGroup(m.chat_id, m)); }
-      catch (e) { if (!(e instanceof Error) || !(e instanceof E2E.NoKey)) throw e; await E2E.receive(m.chat_id); return payloadText(await E2E.decryptGroup(m.chat_id, m)); }
+      try { return parsePayload(await E2E.decryptGroup(m.chat_id, m)); }
+      catch (e) { if (!(e instanceof E2E.NoKey)) throw e; await E2E.receive(m.chat_id); return parsePayload(await E2E.decryptGroup(m.chat_id, m)); }
     }
     const pt = await E2E.decryptDM(m);
-    return pt == null ? { other: true } : payloadText(pt);
+    return pt == null ? { other: true } : parsePayload(pt);
   } catch (e) { console.warn('decrypt', m.id, e); return { fail: true }; }
 }
-async function addMsg(m) {
-  const d = document.createElement('div');
+const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' МБ' : n >= 1024 ? Math.round(n / 1024) + ' КБ' : n + ' Б';
+const msgEls = {};
+async function renderMsg(m, d) {
   d.className = 'msg' + (m.sender_id === me.id ? ' mine' : '');
+  d.textContent = '';
   const small = document.createElement('small');
   txt(small, m.sender_id ? await nameOf(m.sender_id) : 'удалённый аккаунт');
   const b = document.createElement('span');
-  let warn = null;
+  d.append(small, b);
+  let pl = null;
   if (m.ciphertext) {
     chatHasE2e = true;
-    const t = await decryptText(m);
-    if (typeof t === 'string') { txt(b, t); warn = document.createElement('em'); warn.className = 'okE2e'; txt(warn, '🔒 сквозное шифрование'); }
-    else { b.className = 'e2e'; txt(b, t && t.other ? '🔒 зашифровано для другого устройства' : t && t.fail ? '🔒 не удалось расшифровать' : '🔒 зашифровано, откройте в приложении'); }
+    pl = await decryptPayload(m);
+    if (pl && !pl.other && !pl.fail) {
+      txt(b, pl.t);
+      if (pl.f) {
+        const fb = document.createElement('button'); fb.type = 'button'; fb.className = 'file';
+        txt(fb, '📎 ' + (pl.f.n || 'файл') + (pl.f.s ? ' (' + fmtSize(pl.f.s) + ')' : ''));
+        fb.onclick = () => downloadFile(pl.f, m.sender_id !== me.id).catch(e => alert(e.userMsg || ruErr(e)));
+        if (pl.t) d.append(document.createElement('br'));
+        d.append(fb);
+      }
+      if (m.sender_id === me.id && !pl.f) {
+        const eb = document.createElement('button'); eb.type = 'button'; eb.className = 'edit'; eb.title = 'Изменить'; txt(eb, '✏️');
+        eb.onclick = () => editMsg(m, pl.t);
+        small.append(eb);
+      }
+      const w = document.createElement('em'); w.className = 'okE2e'; txt(w, '🔒 сквозное шифрование'); d.append(w);
+    } else { b.className = 'e2e'; txt(b, pl && pl.other ? '🔒 зашифровано для другого устройства' : pl && pl.fail ? '🔒 не удалось расшифровать' : '🔒 зашифровано, откройте в приложении'); }
+  } else {
+    txt(b, m.body);
+    const w = document.createElement('em'); w.className = 'noe2e'; txt(w, '⚠ не зашифровано'); d.append(w);
   }
-  else { txt(b, m.body); warn = document.createElement('em'); warn.className = 'noe2e'; txt(warn, '⚠ не зашифровано'); }
-  d.append(small, b); if (warn) d.append(warn);
-  const box = $('messages'); box.appendChild(d); box.scrollTop = box.scrollHeight;
+  if (m.edited_at) { const e = document.createElement('span'); e.className = 'edited'; txt(e, '(изм.)'); small.append(e); }
 }
+async function addMsg(m) {
+  if (msgEls[m.id]) return updMsg(m);
+  const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
+  const box = $('messages'); box.appendChild(d);
+  await renderMsg(m, d);
+  box.scrollTop = box.scrollHeight;
+}
+async function updMsg(m) { const d = msgEls[m.id]; if (d) await renderMsg(m, d); }
 async function openChat(c, li) {
   currentChat = c;
   document.querySelectorAll('#chatList li').forEach(x => x.classList.remove('active')); li.classList.add('active');
   chatHasE2e = false; peerId = null;
-  txt($('chatTitle'), li.textContent); $('sendForm').hidden = false; $('messages').innerHTML = '';
-  if (c.kind === 'direct') { const { data: pm } = await sb.from('chat_members').select('user_id').eq('chat_id', c.id).neq('user_id', me.id).limit(1).maybeSingle(); peerId = pm ? pm.user_id : null; }
+  for (const k of Object.keys(msgEls)) delete msgEls[k];
+  txt($('chatTitle'), li.textContent); $('sendForm').hidden = false; $('messages').innerHTML = ''; $('safetyBtn').hidden = true;
+  if (c.kind === 'direct') {
+    const { data: pm } = await sb.from('chat_members').select('user_id').eq('chat_id', c.id).neq('user_id', me.id).limit(1).maybeSingle(); peerId = pm ? pm.user_id : null;
+    if (peerId && await e2eStart()) E2E.peerHasKeys(peerId).then(h => { if (currentChat === c) { $('safetyBtn').hidden = !h; safetyLabel(); } }).catch(() => {});
+  }
   else if (await e2eStart()) { try { await E2E.receive(c.id); } catch (e) { console.warn(e); } }
   if (currentChat !== c) return;
   const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at').limit(200);
@@ -234,6 +268,7 @@ async function openChat(c, li) {
   if (chan) sb.removeChannel(chan);
   chan = sb.channel('chat-' + c.id)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => addMsg(p.new))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => updMsg(p.new))
     .subscribe();
 }
 $('sendForm').onsubmit = async e => {
@@ -241,44 +276,171 @@ $('sendForm').onsubmit = async e => {
   const body = $('msgInput').value.trim(); if (!body || !currentChat) return;
   const chat = currentChat;
   $('msgInput').value = '';
-  try { await sendText(chat, body); }
+  try { await sendPayload(chat, JSON.stringify({ v: 1, t: body }), body); }
   catch (err) { $('msgInput').value = body; alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
 };
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
+const KEY_CHANGED = 'Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nНадёжнее сначала сверить код безопасности (кнопка «🔒 Код безопасности»). Нажмите «ОК», только если уверены, что это действительно собеседник: новый ключ будет принят.';
+async function encryptForPeer(pt) {
+  try { return await E2E.encryptDM(peerId, pt); }
+  catch (e) {
+    if (!(e instanceof E2E.KeyChange)) throw e;
+    if (!confirm(KEY_CHANGED)) throw userErr('Не отправлено: ключ собеседника изменился.');
+    await E2E.acceptKeys(e.userId); return E2E.encryptDM(peerId, pt);
+  }
+}
 async function insertEncrypted(row, pt) {
-  const sig = row.ciphertext.sk || Object.values(row.ciphertext).map(x => x.b).sort()[0];
+  const sig = ctSig(row.ciphertext);
   sentOwn[sig] = pt;
   const { data, error } = await sb.from('messages').insert(row).select('id').single();
   if (error) { delete sentOwn[sig]; throw error; }
   await E2E.rememberOwn(data.id, pt, row.ciphertext.sk);
 }
-async function sendText(chat, body) {
+/** Отправка: в E2E-чате только шифротекст; plainBody=null — без шифрования не отправлять вовсе (файлы). */
+async function sendPayload(chat, pt, plainBody) {
   const ok = await e2eStart();
   if (chat.kind === 'direct' && peerId) {
     if (ok && await E2E.peerHasKeys(peerId)) {
-      let r;
-      try { r = await E2E.encryptDM(peerId, body); }
-      catch (e) {
-        if (!(e instanceof E2E.KeyChange)) throw e;
-        if (!confirm('Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nЕсли вы уверены, что это действительно собеседник (лучше сверить код безопасности в приложении), нажмите «ОК», чтобы принять новый ключ и отправить.')) throw userErr('Сообщение не отправлено: ключ собеседника изменился.');
-        await E2E.acceptKeys(e.userId); r = await E2E.encryptDM(peerId, body);
-      }
-      if (!r) throw userErr('У собеседника больше нет ключей шифрования. Сообщение не отправлено, попробуйте ещё раз.');
+      const r = await encryptForPeer(pt);
+      if (!r) throw userErr('У собеседника больше нет ключей шифрования. Не отправлено, попробуйте ещё раз.');
       return insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct }, r.pt);
     }
+    if (plainBody == null) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
     if (!ok && !confirm('Шифрование на этом устройстве не запустилось. Отправить сообщение БЕЗ сквозного шифрования?')) throw userErr('Сообщение не отправлено.');
   } else if (chat.kind === 'group' && ok) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const { epoch, others } = await E2E.distribute(chat.id);
       if (!others) break; // ни у кого из участников нет ключей — открытый текст с пометкой
-      const r = await E2E.encryptGroup(chat.id, epoch, body);
+      const r = await E2E.encryptGroup(chat.id, epoch, pt);
       try { return await insertEncrypted({ chat_id: chat.id, sender_id: me.id, body: '', ciphertext: r.ct, key_epoch: epoch, sender_device: E2E.deviceId() }, r.pt); }
       catch (e) { if (!String(e && e.message).includes('stale key epoch')) throw e; }
     }
   }
-  const { error } = await sb.from('messages').insert({ chat_id: chat.id, sender_id: me.id, body });
+  if (plainBody == null) throw userErr('Файл не отправлен: шифрование в этом чате недоступно, а файлы без шифрования не отправляются.');
+  const { error } = await sb.from('messages').insert({ chat_id: chat.id, sender_id: me.id, body: plainBody });
   if (error) throw error;
+}
+
+// ---------- правка зашифрованных сообщений (RPC edit_message, как в Android) ----------
+async function editMsg(m, oldText) {
+  const t = prompt('Изменить сообщение', oldText);
+  if (t == null || !t.trim() || t.trim() === oldText) return;
+  try { await editEncrypted(m, JSON.stringify({ v: 1, t: t.trim() })); }
+  catch (e) { alert(e.userMsg || ruErr(e)); }
+}
+async function editEncrypted(m, pt) {
+  if (!(await e2eStart())) throw userErr('Шифрование на этом устройстве не запустилось — правка невозможна.');
+  if (m.ciphertext.sk !== undefined) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { epoch } = await E2E.distribute(m.chat_id);
+      const r = await E2E.encryptGroup(m.chat_id, epoch, pt);
+      sentOwn[r.ct.sk] = pt;
+      const { error } = await sb.rpc('edit_message', { p_id: m.id, p_ciphertext: r.ct, p_key_epoch: epoch, p_sender_device: E2E.deviceId() });
+      if (!error) { await E2E.rememberOwn(m.id, pt, r.ct.sk); return; }
+      delete sentOwn[r.ct.sk];
+      if (!String(error.message).includes('stale key epoch')) throw error;
+    }
+    throw userErr('Не удалось изменить: ключ группы меняется слишком часто, попробуйте ещё раз.');
+  }
+  const r = await encryptForPeer(pt);
+  if (!r) throw userErr('У собеседника больше нет ключей шифрования — правка не отправлена.');
+  const sig = ctSig(r.ct); sentOwn[sig] = pt;
+  const { error } = await sb.rpc('edit_message', { p_id: m.id, p_ciphertext: r.ct, p_key_epoch: null, p_sender_device: null });
+  if (error) { delete sentOwn[sig]; throw error; }
+  await E2E.rememberOwn(m.id, pt);
+}
+
+// ---------- файлы: AES-256-GCM как в Android (ключ и sha256 внутри зашифрованного сообщения) ----------
+const MAX_FILE = 25 * 1024 * 1024;
+const RISKY = ['apk','apks','xapk','aab','exe','msi','bat','cmd','sh','jar','dex','js','vbs','ps1','scr','com','html','htm','xhtml','svg','mht','mhtml'];
+const safeName = n => { n = String(n || 'file').replace(/[\\/\u0000-\u001f\u007f]/g, '_').replace(/\.\./g, '_').trim(); if (!n || n === '.') n = 'file'; return n.length > 200 ? n.slice(-200) : n; };
+$('attachBtn').onclick = () => $('fileInput').click();
+$('fileInput').onchange = async () => {
+  const file = $('fileInput').files[0]; $('fileInput').value = '';
+  if (!file || !currentChat) return;
+  if (file.size <= 0 || file.size > MAX_FILE) return alert('Файл пустой или больше 25 МБ');
+  const chat = currentChat, btn = $('attachBtn'); btn.disabled = true; txt(btn, '⏳');
+  try { await sendFile(chat, file); }
+  catch (e) { alert(e.userMsg || ruErr(e)); }
+  finally { btn.disabled = false; txt(btn, '📎'); }
 };
+async function sendFile(chat, file) {
+  if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
+  if (chat.kind === 'direct' && !(peerId && await E2E.peerHasKeys(peerId))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
+  const plain = new Uint8Array(await file.arrayBuffer());
+  const enc = await E2E.encryptFile(plain);
+  const path = `chat/${chat.id}/${crypto.randomUUID()}_file.bin`;
+  const { error } = await sb.storage.from('chat-files').upload(path, new Blob([enc.ct], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: false });
+  if (error) throw error;
+  const f = { p: path, n: safeName(file.name), s: plain.length, m: file.type || '', k: enc.k, iv: enc.iv, h: enc.h };
+  try { await sendPayload(chat, JSON.stringify({ v: 1, t: '', f }), null); }
+  catch (e) { await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e; }
+}
+async function downloadFile(f, fromOther) {
+  const name = safeName(f.n);
+  if (fromOther && RISKY.some(x => name.toLowerCase().endsWith('.' + x)) && !confirm(`«${name}» может быть опасным файлом. Скачать?`)) return;
+  const { data, error } = await sb.storage.from('chat-files').createSignedUrl(f.p, 60);
+  if (error) throw error;
+  const r = await fetch(data.signedUrl);
+  if (!r.ok) throw userErr('Скачивание не удалось');
+  const ct = new Uint8Array(await r.arrayBuffer());
+  if (ct.length > MAX_FILE + 16) throw userErr('Файл слишком большой');
+  const plain = await E2E.decryptFile(ct, f.k, f.iv, f.h);
+  const url = URL.createObjectURL(new Blob([plain], { type: 'application/octet-stream' }));
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+// ---------- код безопасности ----------
+function safetyLabel() { if (peerId && E2E) txt($('safetyBtn'), E2E.hasPendingChange(peerId) ? '⚠ Ключ изменился' : E2E.isVerified(peerId) ? '🔒 Код проверен ✅' : '🔒 Код безопасности'); }
+async function showSafety() {
+  const peer = peerId; if (!peer) return;
+  const nums = await E2E.safetyNumbers(peer);
+  const list = $('safetyList'); list.textContent = '';
+  nums.forEach((n, i) => {
+    if (nums.length > 1) { const h = document.createElement('p'); h.className = 'hint'; txt(h, 'Устройство ' + (i + 1)); list.append(h); }
+    const d = document.createElement('div'); d.className = 'fp';
+    txt(d, n.digits.match(/.{1,5}/g).reduce((s, g, j) => s + g + (j % 4 === 3 ? '\n' : '  '), '').trim());
+    const q = qrcode(0, 'M'); q.addData(n.qr); q.make();
+    const qd = document.createElement('div'); qd.className = 'fpqr'; qd.innerHTML = q.createSvgTag(4, 0);
+    list.append(d, qd);
+  });
+  if (!nums.length) { const p = document.createElement('p'); txt(p, 'Нет ключей собеседника.'); list.append(p); }
+  const st = () => { const s = $('safetyState'); s.className = 'hint';
+    if (E2E.hasPendingChange(peer)) { txt(s, '⚠ Ключ собеседника изменился. Сверьте новый код, прежде чем принимать.'); }
+    else if (E2E.isVerified(peer)) { s.className = 'hint ok'; txt(s, '✅ Код проверен'); }
+    else txt(s, 'Код ещё не проверен.');
+    $('acceptBtn').hidden = !E2E.hasPendingChange(peer); safetyLabel(); };
+  st(); $('scanInput').value = '';
+  const check = async v => {
+    if (!v) return;
+    if (await E2E.verifyScanned(peer, v)) { st(); $('safetyState').className = 'hint ok'; txt($('safetyState'), '✅ QR совпал — код проверен'); }
+    else { $('safetyState').className = 'hint bad'; txt($('safetyState'), '❌ Код НЕ совпадает. Возможно, переписку подменяют или у собеседника другое устройство.'); }
+  };
+  $('checkBtn').onclick = () => check($('scanInput').value.trim());
+  $('matchBtn').onclick = async () => { if (confirm('Вы сравнили все 60 цифр с экраном собеседника, и они совпадают?')) { await E2E.markVerified(peer); st(); } };
+  $('acceptBtn').onclick = async () => { if (confirm('Принять новый ключ? Делайте это, только если собеседник подтвердил смену устройства. Надёжнее — сначала сверить QR.')) { await E2E.acceptKeys(peer); st(); } };
+  $('scanBtn').hidden = !('BarcodeDetector' in window && navigator.mediaDevices);
+  $('scanBtn').onclick = () => scanQr().then(check).catch(e => alert('Камера недоступна: ' + ruErr(e)));
+  $('closeSafety').onclick = () => { stopScan(); $('safetyDlg').close(); };
+  $('safetyDlg').showModal();
+}
+let scanStream = null;
+function stopScan() { if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; } $('scanVideo').hidden = true; }
+async function scanQr() {
+  const det = new BarcodeDetector({ formats: ['qr_code'] });
+  scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  const v = $('scanVideo'); v.srcObject = scanStream; v.hidden = false; await v.play();
+  try {
+    for (let i = 0; i < 600 && scanStream; i++) {
+      const codes = await det.detect(v).catch(() => []);
+      if (codes.length) return codes[0].rawValue;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    throw new Error('QR не найден');
+  } finally { stopScan(); }
+}
+$('safetyBtn').onclick = () => showSafety().catch(e => alert(ruErr(e)));
 $('newDirect').onclick = async () => {
   const nick = normNick($('findUser').value); if (!nick) return;
   const { data: u } = await sb.from('profiles').select('id').eq('username', nick).maybeSingle();

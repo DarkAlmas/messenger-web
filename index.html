@@ -47,14 +47,32 @@
     <ul id="chatList"></ul>
   </aside>
   <main>
-    <header id="chatTitle">Выберите чат</header>
+    <header id="chatHead"><span id="chatTitle">Выберите чат</span><button type="button" id="safetyBtn" class="link" hidden>🔒 Код безопасности</button></header>
     <div id="messages"></div>
     <form id="sendForm" hidden>
+      <button type="button" id="attachBtn" title="Отправить файл (до 25 МБ, со сквозным шифрованием)" aria-label="Прикрепить файл">📎</button>
+      <input type="file" id="fileInput" hidden>
       <input id="msgInput" maxlength="4000" placeholder="Сообщение" autocomplete="off">
-      <button>Отправить</button>
+      <button type="submit" id="sendBtn">Отправить</button>
     </form>
   </main>
 </section>
+<dialog id="safetyDlg">
+  <h3>Код безопасности</h3>
+  <p class="hint">Сверьте код с собеседником: отсканируйте QR в его приложении (меню «🔒 Код безопасности» → «Сканировать QR собеседника») или сравните цифры. Если совпало — переписку никто не подменяет.</p>
+  <div id="safetyList"></div>
+  <p id="safetyState" class="hint"></p>
+  <label for="scanInput">Код из QR собеседника (если отсканировали другим приложением)</label>
+  <input id="scanInput" placeholder="Вставьте текст из QR">
+  <video id="scanVideo" playsinline muted hidden></video>
+  <div class="dlg-actions">
+    <button type="button" id="scanBtn">Сканировать камерой</button>
+    <button type="button" id="checkBtn">Проверить код</button>
+    <button type="button" id="matchBtn">Цифры совпадают</button>
+    <button type="button" id="acceptBtn" hidden>Принять новый ключ</button>
+    <button type="button" id="closeSafety" class="link">Закрыть</button>
+  </div>
+</dialog>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script src="config.js"></script>
