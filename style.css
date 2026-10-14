@@ -53,3 +53,5 @@ dialog::backdrop{background:#0008}
 .dlg-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 #scanVideo{width:100%;border-radius:8px;margin-top:6px}
 .ok{color:#5fb878}.bad{color:#e57373}
+#notice{position:fixed;top:0;left:0;right:0;z-index:50;background:#7a1f1f;color:#fff;padding:10px 44px 10px 14px;font-size:14px}
+#notice button{position:absolute;right:6px;top:4px;background:none;padding:6px 10px}
