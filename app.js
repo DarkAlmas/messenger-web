@@ -27,7 +27,7 @@ $('loginForm').onsubmit = async e => {
     if (error) txt($('authMsg'), error.message);
   }
 };
-$('logout').onclick = async () => { await sb.auth.signOut(); };
+$('logout').onclick = async () => { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } };
 
 // ---------- вход по QR ----------
 async function fn(name, body) {
@@ -80,7 +80,7 @@ async function loadChats() {
 async function nameOf(id) {
   if (names[id]) return names[id];
   const { data } = await sb.from('profiles').select('username, display_name').eq('id', id).maybeSingle();
-  return (names[id] = data ? (data.display_name || data.username) : 'неизвестный');
+  return (names[id] = data ? ((data.display_name && data.display_name !== data.username) ? data.display_name + ' @' + data.username : '@' + data.username) : 'неизвестный');
 }
 async function addMsg(m) {
   const d = document.createElement('div');
