@@ -460,9 +460,10 @@ const REACT_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 const reacts = {}; // id → [{user_id, emoji}]
 function paintReacts(id, d) {
   d = d || msgEls[id]; if (!d) return;
-  let box = d.querySelector(':scope > .reacts'); const list = reacts[id] || [];
+  const foot = d.querySelector(':scope > .foot'); if (!foot) return;
+  let box = foot.querySelector(':scope > .reacts'); const list = reacts[id] || [];
   if (!list.length) { if (box) box.remove(); return; }
-  if (!box) { box = document.createElement('div'); box.className = 'reacts'; d.insertBefore(box, d.querySelector(':scope > .foot')); }
+  if (!box) { box = document.createElement('span'); box.className = 'reacts'; foot.prepend(box); } // в строке времени, слева
   box.textContent = '';
   const by = new Map();
   for (const r of list) { const x = by.get(r.emoji) || { n: 0, mine: false }; x.n++; if (r.user_id === me.id) x.mine = true; by.set(r.emoji, x); }
