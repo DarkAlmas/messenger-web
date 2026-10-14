@@ -8,8 +8,8 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: blob: https://tbbaztmtkcrzxnkkmtqv.supabase.co; connect-src 'self' https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; base-uri 'none'; form-action 'none';">
 <title>Мессенджер</title>
 <link rel="icon" href="data:,">
-<script src="theme.js?v=20261014i"></script>
-<link rel="stylesheet" href="style.css?v=20261014i">
+<script src="theme.js?v=20261014j"></script>
+<link rel="stylesheet" href="style.css?v=20261014j">
 </head>
 <body>
 <div id="notice" role="alert" hidden><span id="noticeText"></span><button type="button" id="noticeClose" aria-label="Закрыть">✕</button></div>
@@ -84,7 +84,7 @@
         <label>Цвет фона</label>
         <div id="colorRow" class="colors"></div>
         <p id="extNote" class="hint small" hidden>Сервер пока не поддерживает фото, цвет и «о себе». Имя и никнейм менять можно.</p>
-        <form id="profForm">
+        <form id="profForm" novalidate>
           <label for="pName">Имя</label><input id="pName" maxlength="64" required>
           <label for="pNick">Никнейм</label><input id="pNick" maxlength="32" pattern="[a-z0-9_]{3,32}" autocapitalize="off" required>
           <p class="hint small">3–32 символа: a-z, 0-9 и _</p>
@@ -132,7 +132,7 @@
 </dialog>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
-<script src="config.js?v=20261014i"></script>
-<script src="app.js?v=20261014i"></script>
+<script src="config.js?v=20261014j"></script>
+<script src="app.js?v=20261014j"></script>
 </body>
 </html>
