@@ -7,6 +7,7 @@ if (navigator.locks) navigator.locks.request('msgr-auth-leader', () => { sb.auth
 else sb.auth.startAutoRefresh();
 let me = null, regMode = false, currentChat = null, chan = null, qrTimer = null;
 const names = {};
+const olderBtn = document.getElementById('olderBtn'); // ссылка сохраняется: кнопка переносится при очистке списка сообщений
 
 function txt(el, s) { el.textContent = s; }
 // ---------- видимые ошибки: ничего не падает молча ----------
@@ -374,7 +375,7 @@ async function openChat(c, li) {
   for (const k of Object.keys(msgEls)) delete msgEls[k];
   txt($('chatTitle'), li.querySelector('.name') ? li.querySelector('.name').textContent : li.textContent);
   $('chatAva').hidden = true;
-  $('sendForm').hidden = false; $('messages').innerHTML = ''; $('messages').append($('olderBtn')); $('safetyBtn').hidden = true;
+  $('sendForm').hidden = false; $('messages').innerHTML = ''; $('messages').append(olderBtn); $('safetyBtn').hidden = true;
   if (c.kind === 'direct') {
     if (!peerId) { const { data: pm } = await sb.from('chat_members').select('user_id').eq('chat_id', c.id).neq('user_id', me.id).limit(1).maybeSingle(); peerId = pm ? pm.user_id : null; }
     if (peerId) getProfile(peerId).then(p => { if (currentChat === c && p) { txt($('chatTitle'), displayName(p)); fillAvatar($('chatAva'), p); } });
@@ -391,20 +392,20 @@ async function openChat(c, li) {
     // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { readState[p.new.user_id] = p.new.last_read_at; paintAllTicks(); } })
     .subscribe();
-  $('messages').prepend($('olderBtn')); $('olderBtn').hidden = true; oldestAt = null;
+  $('messages').prepend(olderBtn); olderBtn.hidden = true; oldestAt = null;
   const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE);
   if (error) showErr('Не удалось загрузить сообщения: ' + ruErr(error));
   if (currentChat !== c) return;
   for (const m of (data || []).reverse()) await addMsg(m);
   if (data && data.length) oldestAt = data[0].created_at;
-  $('olderBtn').hidden = !(data && data.length === PAGE);
+  olderBtn.hidden = !(data && data.length === PAGE);
   if (!(data || []).length) { const p = document.createElement('p'); p.className = 'empty-state'; txt(p, 'Сообщений пока нет. Всё, что вы напишете, будет зашифровано сквозным шифрованием.'); $('messages').append(p); }
   await loadReadState();
   maybeMarkRead();
 }
 const PAGE = 200; let oldestAt = null;
-$('olderBtn').onclick = async () => {
-  const c = currentChat, btn = $('olderBtn'), box = $('messages'); if (!c || !oldestAt) return;
+olderBtn.onclick = async () => {
+  const c = currentChat, btn = olderBtn, box = $('messages'); if (!c || !oldestAt) return;
   btn.disabled = true; txt(btn, 'Загрузка…');
   try {
     const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).lt('created_at', oldestAt).order('created_at', { ascending: false }).limit(PAGE);
