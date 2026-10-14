@@ -121,7 +121,7 @@ function stopQr() { qrGen++; clearInterval(qrTimer); clearInterval(qrCountdown);
 function qrState(kind, status, timer) {
   const box = $('qr');
   box.classList.toggle('empty', kind !== 'ok');
-  if (kind !== 'ok') { box.innerHTML = ''; const s = document.createElement('span'); txt(s, kind === 'loading' ? 'Загрузка…' : 'QR недоступен'); box.appendChild(s); }
+  if (kind !== 'ok') { box.innerHTML = ''; const s = document.createElement('span'); txt(s, kind === 'loading' ? 'Загрузка…' : '⚠'); s.setAttribute('aria-hidden', 'true'); box.appendChild(s); }
   txt($('qrStatus'), status); txt($('qrTimerText'), timer || '');
   $('qrRetry').hidden = kind !== 'error';
 }
@@ -129,7 +129,7 @@ function qrFail(e) {
   stopQr();
   qrFails++;
   const MAX = 5;
-  const reason = e && e.status === 429 ? 'Слишком много запросов QR.' : (e && e.status ? 'Сервер QR временно недоступен.' : 'Нет соединения с сервером.');
+  const reason = e && e.status === 429 ? 'Слишком много попыток, попробуйте позже.' : (e && e.status ? 'Сервер QR временно недоступен.' : 'Нет соединения с сервером.');
   if (qrFails > MAX) { qrState('error', reason + ' Автоповтор остановлен — нажмите «Обновить QR».'); return; }
   let wait = Math.min(5000 * 2 ** (qrFails - 1), 120000);
   if (e && e.retryAfter) wait = Math.max(wait, e.retryAfter * 1000);
@@ -159,15 +159,15 @@ async function startQr() {
   const tick = () => {
     const s = Math.max(0, Math.ceil((expires - Date.now()) / 1000));
     txt($('qrTimerText'), 'Код действует ещё ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'));
-    if (s <= 0) { stopQr(); qrState('error', 'Срок действия QR истёк.'); }
+    if (s <= 0 && gen === qrGen) { stopQr(); qrState('error', 'Срок действия QR истёк.'); }
   };
   tick(); qrCountdown = setInterval(tick, 1000);
   let pollFails = 0;
   qrTimer = setInterval(async () => {
-    if (Date.now() >= expires) return;
+    if (Date.now() >= expires || gen !== qrGen) return;
     let p; try { p = await fn('qr-poll', { token: q.token, poll_secret: q.poll_secret }); pollFails = 0; }
-    catch (e) { if (e.status === 429 || ++pollFails >= 5) qrFail(e); return; }
-    if (!p) return;
+    catch (e) { if (gen === qrGen && !me && (e.status === 429 || ++pollFails >= 5)) qrFail(e); return; }
+    if (!p || gen !== qrGen) return; // ответ устаревшего опроса не перебивает текущее сообщение (напр. 429)
     if (p.status === 'approved') {
       stopQr(); qrState('loading', 'Вход подтверждён, входим…');
       const s = p.session;
