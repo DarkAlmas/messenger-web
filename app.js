@@ -431,7 +431,7 @@ async function renderMsg(m, d) {
     } else { b.className = 'body e2e'; txt(b, pl && pl.other ? 'зашифровано для другого устройства' : pl && pl.fail ? 'не удалось расшифровать' : 'зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
   } else {
     txt(b, m.body);
-    lock.className = 'noe2e'; lock.title = 'Старое сообщение без шифрования'; txt(lock, '⚠ без шифрования');
+    lock.className = 'noe2e'; lock.title = 'Старое сообщение без шифрования'; txt(lock, '⚠ не зашифровано');
   }
   msgData[m.id] = { m, pl: pl && !pl.other && !pl.fail ? pl : null };
   if (m.forwarded) { const f = document.createElement('span'); f.className = 'fwd'; txt(f, '↪ Переслано' + (pl && pl.fw ? ' от ' + pl.fw : '')); d.insertBefore(f, small.textContent ? small.nextSibling : d.firstChild); }
