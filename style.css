@@ -236,3 +236,4 @@ button{border-radius:var(--radius-button)}
 .msg .react.mine{background:color-mix(in srgb,var(--color-primary) 22%,transparent);border-color:color-mix(in srgb,var(--color-primary) 55%,transparent)}
 .msg.mine .react{color:var(--bubble-out-text);background:rgba(255,255,255,.18);border-color:transparent}
 .msg.mine .react.mine{border-color:rgba(255,255,255,.5)}
+#buildInfo{text-align:center;margin-top:12px;user-select:all}

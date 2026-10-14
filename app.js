@@ -15,6 +15,8 @@ function showErr(msg) {
   const n = $('notice'); if (!n) { alert(msg); return; }
   txt($('noticeText'), msg); n.hidden = false;
 }
+// снимаем баннер «Нет соединения…», как только запрос прошёл успешно
+function clearNetNotice() { const n = $('notice'); if (n && !n.hidden && $('noticeText').textContent.includes('Нет соединения')) n.hidden = true; }
 $('noticeClose').onclick = () => { $('notice').hidden = true; };
 window.addEventListener('error', e => showErr('Ошибка на странице: ' + ruErr(e.error || e.message) + '. Обновите страницу (Ctrl+F5).'));
 window.addEventListener('unhandledrejection', e => showErr('Ошибка: ' + ruErr(e.reason)));
@@ -90,6 +92,7 @@ $('loginForm').onsubmit = async e => {
 const NET_ERR = 'Нет соединения с сервером';
 function netBack() {
   if ($('authMsg').textContent.startsWith(NET_ERR)) txt($('authMsg'), '');
+  clearNetNotice();
   if (!me && qrFails && $('qrStatus').textContent.startsWith('Нет соединения')) { qrFails = 0; startQr(); }
 }
 window.addEventListener('online', netBack);
@@ -478,10 +481,10 @@ async function loadReacts(ids) {
   ids = ids.filter(Boolean);
   for (let i = 0; i < ids.length; i += 80) {
     const part = ids.slice(i, i + 80);
-    const { data, error } = await sb.from('reactions').select('message_id,user_id,emoji').in('message_id', part).order('created_at', { ascending: true });
+    const { data, error } = await sb.from('reactions').select('id,message_id,user_id,emoji').in('message_id', part).order('created_at', { ascending: true });
     if (error) { console.warn('reactions', error.message); return; }
     for (const id of part) reacts[id] = [];
-    for (const r of data || []) reacts[r.message_id].push({ user_id: r.user_id, emoji: r.emoji });
+    for (const r of data || []) addReact(r, false);
     for (const id of part) paintReacts(id);
   }
 }
@@ -490,12 +493,20 @@ function reloadReactsSoon() { clearTimeout(reactTimer); reactTimer = setTimeout(
 async function toggleReact(id, e) {
   const had = (reacts[id] || []).some(r => r.user_id === me.id && r.emoji === e);
   const q = had ? sb.from('reactions').delete().eq('message_id', id).eq('user_id', me.id).eq('emoji', e)
-                : sb.from('reactions').insert({ message_id: id, user_id: me.id, emoji: e });
-  const { error } = await q;
+                : sb.from('reactions').insert({ message_id: id, user_id: me.id, emoji: e }).select('id,message_id,user_id,emoji');
+  const { data, error } = await q;
   if (error) return toast('Не удалось изменить реакцию: ' + ruErr(error));
-  if (had) reacts[id] = reacts[id].filter(r => !(r.user_id === me.id && r.emoji === e));
-  else (reacts[id] = reacts[id] || []).push({ user_id: me.id, emoji: e });
-  paintReacts(id);
+  if (had) { reacts[id] = (reacts[id] || []).filter(r => !(r.user_id === me.id && r.emoji === e)); paintReacts(id); }
+  else addReact((data && data[0]) || { message_id: id, user_id: me.id, emoji: e });
+}
+// Одна реакция = один (message_id, user_id, emoji); дубликат из Realtime и из ответа REST отбрасываем
+function addReact(r, paint = true) {
+  if (!r || !r.message_id) return;
+  const list = reacts[r.message_id] = reacts[r.message_id] || [];
+  const ex = list.find(x => (r.id && x.id === r.id) || (x.user_id === r.user_id && x.emoji === r.emoji));
+  if (ex) { if (r.id && !ex.id) ex.id = r.id; return; }
+  list.push({ id: r.id, user_id: r.user_id, emoji: r.emoji });
+  if (paint) paintReacts(r.message_id);
 }
 function previewOf(id) {
   const x = msgData[id]; if (!x) return 'Сообщение';
@@ -701,7 +712,7 @@ function paintSub() {
   const t = seenText(lastSeen); if (t === 'в сети') s.className = 'online'; txt(s, t);
 }
 setInterval(() => { if (currentChat && document.visibilityState === 'visible') loadLastSeen(); }, 60000);
-setInterval(() => { if (currentChat && typingUntil && Date.now() >= typingUntil) { typingUntil = 0; paintSub(); } }, 1000);
+setInterval(() => { if (currentChat && typingUntil && Date.now() >= typingUntil) { typingUntil = 0; paintSub(); loadLastSeen(); } }, 250);
 $('msgInput').addEventListener('input', () => {
   if (!chan || !currentChat || editing || !$('msgInput').value) return;
   if (Date.now() - lastTypingSent < 3000) return; // не чаще раза в 3 с
@@ -710,7 +721,8 @@ $('msgInput').addEventListener('input', () => {
 });
 function onTyping(p) {
   if (!p || !p.u || p.u === me.id) return;
-  if (p.stop) { typingUntil = 0; return paintSub(); }
+  if (p.stop) { typingUntil = 0; paintSub(); return loadLastSeen(); }
+  if (!typingUntil) loadLastSeen(); // свежий статус заранее: после «печатает» сразу верный текст
   typingUntil = Date.now() + 5000; typingWho = profiles[p.u] ? displayName(profiles[p.u]) : null; paintSub();
 }
 
@@ -720,6 +732,7 @@ document.querySelectorAll('#seenSeg button').forEach(b => {
   b.onclick = async () => {
     const { error } = await sb.from('profiles').update({ last_seen_visibility: b.dataset.v }).eq('id', me.id);
     if (error) return txt($('seenMsg'), ruErr(error));
+    txt($('seenMsg'), ''); clearNetNotice();
     profiles[me.id] = { ...(profiles[me.id] || {}), last_seen_visibility: b.dataset.v }; paintSeenSeg(b.dataset.v); toast('Сохранено');
   };
 });
@@ -773,7 +786,7 @@ async function openChat(c, li) {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_pins' }, p => { if (!p.old || !p.old.chat_id || p.old.chat_id === c.id) loadPins(); })
     // reactions без chat_id: INSERT сверяем с загруженными сообщениями, DELETE приходит только с id — перечитываем
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, p => { const r = p.new; if (r && msgEls[r.message_id] && !(reacts[r.message_id] || []).some(x => x.user_id === r.user_id && x.emoji === r.emoji)) { (reacts[r.message_id] = reacts[r.message_id] || []).push({ user_id: r.user_id, emoji: r.emoji }); paintReacts(r.message_id); } })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, p => { const r = p.new; if (r && msgEls[r.message_id]) addReact(r); })
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, () => reloadReactsSoon())
     .on('broadcast', { event: 'typing' }, p => onTyping(p.payload))
     .subscribe((st, err) => { if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') console.warn('realtime', st, err); });
@@ -817,7 +830,7 @@ olderBtn.onclick = async () => {
 async function onIncoming(m) {
   const e = $('messages').querySelector('.empty-state'); if (e) e.remove();
   await addMsg(m);
-  if (m.sender_id !== me.id && typingUntil) { typingUntil = 0; paintSub(); }
+  if (m.sender_id !== me.id && typingUntil) { typingUntil = 0; paintSub(); loadLastSeen(); }
   if (m.sender_id !== me.id) { readState[m.sender_id] = m.created_at > (readState[m.sender_id] || '') ? m.created_at : readState[m.sender_id]; paintAllTicks(); maybeMarkRead(); }
   loadChatsSoon();
 }
@@ -1094,6 +1107,7 @@ function openSettings(push = true, which = 'settings') {
   if (push && location.hash !== '#' + which) history.pushState({ v: which }, '', '#' + which);
   if (which === 'profile') fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
   else { getProfile(me.id, true).then(p => paintSeenSeg((p && p.last_seen_visibility) || 'everyone'));
+    txt($('buildInfo'), 'Сборка ' + (window.BUILD ? BUILD.commit + ' · ' + BUILD.date : 'неизвестна'));
     txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—'); }
 }
 function closeSettings() { $('app').classList.remove('in-settings'); setNav('chats'); maybeMarkRead(); }
