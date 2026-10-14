@@ -95,6 +95,7 @@ setInterval(async () => {
   try { const r = await fetch(`${C.SUPABASE_URL}/auth/v1/health`, { headers: { apikey: C.SUPABASE_KEY }, cache: 'no-store' }); if (r.status < 500) netBack(); } catch (e) { /* всё ещё нет сети */ }
 }, 5000);
 $('logout').onclick = async () => {
+  if (!confirm('Выйти на этом устройстве?\n\nКлючи шифрования этого браузера будут удалены. Вся зашифрованная переписка, которую вы видите здесь (включая ваши отправленные сообщения), после выхода станет нечитаемой на этом устройстве — восстановить её нельзя. Сообщения останутся читаемыми на других ваших устройствах.')) return;
   try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
   try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } };
 
@@ -262,7 +263,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261014j').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261014k').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -285,7 +286,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 window.addEventListener('focus', () => deviceCheck(false));
 async function e2eStart() {
   try { const m = await e2eMod; await m.ensureReady(); e2eErr = null; }
-  catch (e) { e2eErr = e; console.warn('E2E недоступно:', e); showErr('Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
+  catch (e) { e2eErr = e; console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
   return E2E && !e2eErr;
 }
 const sentOwn = {}; // подпись шифротекста → открытый текст (своё сообщение приходит по Realtime раньше, чем сохранится копия)
@@ -373,7 +374,7 @@ async function openChat(c, li) {
   for (const k of Object.keys(msgEls)) delete msgEls[k];
   txt($('chatTitle'), li.querySelector('.name') ? li.querySelector('.name').textContent : li.textContent);
   $('chatAva').hidden = true;
-  $('sendForm').hidden = false; $('messages').innerHTML = ''; $('safetyBtn').hidden = true;
+  $('sendForm').hidden = false; $('messages').innerHTML = ''; $('messages').append($('olderBtn')); $('safetyBtn').hidden = true;
   if (c.kind === 'direct') {
     if (!peerId) { const { data: pm } = await sb.from('chat_members').select('user_id').eq('chat_id', c.id).neq('user_id', me.id).limit(1).maybeSingle(); peerId = pm ? pm.user_id : null; }
     if (peerId) getProfile(peerId).then(p => { if (currentChat === c && p) { txt($('chatTitle'), displayName(p)); fillAvatar($('chatAva'), p); } });
@@ -390,14 +391,37 @@ async function openChat(c, li) {
     // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { readState[p.new.user_id] = p.new.last_read_at; paintAllTicks(); } })
     .subscribe();
-  const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(200);
+  $('messages').prepend($('olderBtn')); $('olderBtn').hidden = true; oldestAt = null;
+  const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE);
   if (error) showErr('Не удалось загрузить сообщения: ' + ruErr(error));
   if (currentChat !== c) return;
   for (const m of (data || []).reverse()) await addMsg(m);
+  if (data && data.length) oldestAt = data[0].created_at;
+  $('olderBtn').hidden = !(data && data.length === PAGE);
   if (!(data || []).length) { const p = document.createElement('p'); p.className = 'empty-state'; txt(p, 'Сообщений пока нет. Всё, что вы напишете, будет зашифровано сквозным шифрованием.'); $('messages').append(p); }
   await loadReadState();
   maybeMarkRead();
 }
+const PAGE = 200; let oldestAt = null;
+$('olderBtn').onclick = async () => {
+  const c = currentChat, btn = $('olderBtn'), box = $('messages'); if (!c || !oldestAt) return;
+  btn.disabled = true; txt(btn, 'Загрузка…');
+  try {
+    const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).lt('created_at', oldestAt).order('created_at', { ascending: false }).limit(PAGE);
+    if (error) throw error;
+    if (currentChat !== c) return;
+    const h0 = box.scrollHeight, top0 = box.scrollTop;
+    for (const m of data || []) { // от новых к старым, каждое вставляем сразу после кнопки
+      if (msgEls[m.id]) continue;
+      const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
+      btn.after(d); await renderMsg(m, d);
+    }
+    box.scrollTop = top0 + (box.scrollHeight - h0); // остаёмся на том же месте
+    if (data && data.length) oldestAt = data[data.length - 1].created_at;
+    btn.hidden = !(data && data.length === PAGE);
+  } catch (e) { alert('Не удалось загрузить более ранние сообщения: ' + ruErr(e)); }
+  finally { btn.disabled = false; txt(btn, 'Загрузить более ранние сообщения'); }
+};
 async function onIncoming(m) {
   const e = $('messages').querySelector('.empty-state'); if (e) e.remove();
   await addMsg(m);
@@ -652,22 +676,35 @@ function applyTheme(t) {
 document.querySelectorAll('#themeSeg button').forEach(b => { b.onclick = () => applyTheme(b.dataset.theme); });
 applyTheme((() => { try { return localStorage.getItem('msgr-theme') || 'system'; } catch { return 'system'; } })());
 let pickedColor = null;
-function openSettings(push = true) {
+let tab = 'chats';
+function setNav(t) { tab = t; document.querySelectorAll('#bottomNav button').forEach(b => { if (b.dataset.nav === t) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }); }
+function openSettings(push = true, which = 'settings') {
   $('app').classList.add('in-settings');
-  if (push && location.hash !== '#settings') history.pushState({ v: 'settings' }, '', '#settings');
-  fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
+  document.querySelectorAll('#settings .group').forEach(g => { g.hidden = g.dataset.tab !== which; });
+  txt($('pageTitle'), which === 'profile' ? 'Профиль' : 'Настройки');
+  setNav(which);
+  if (push && location.hash !== '#' + which) history.pushState({ v: which }, '', '#' + which);
+  if (which === 'profile') fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
+  else { txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—'); }
 }
-function closeSettings() { $('app').classList.remove('in-settings'); maybeMarkRead(); }
-$('settingsBtn').onclick = () => openSettings(); $('meBtn').onclick = () => openSettings();
-$('settingsBack').onclick = () => location.hash === '#settings' ? history.back() : closeSettings();
+function closeSettings() { $('app').classList.remove('in-settings'); setNav('chats'); maybeMarkRead(); }
+document.querySelectorAll('#bottomNav button').forEach(b => {
+  b.onclick = () => {
+    const t = b.dataset.nav;
+    if (t === 'chats') { if (/^#(profile|settings)$/.test(location.hash)) history.pushState({ v: 'chats' }, '', currentChat && $('app').classList.contains('in-chat') ? '#chat' : '#'); closeSettings(); }
+    else openSettings(true, t);
+  };
+});
+$('meBtn').onclick = () => openSettings(true, 'profile');
+$('settingsBack').onclick = () => /^#(profile|settings)$/.test(location.hash) ? history.back() : closeSettings();
 window.addEventListener('popstate', () => {
-  if (location.hash === '#settings') openSettings(false); else closeSettings();
-  if (location.hash !== '#chat' && location.hash !== '#settings') closeChatView();
+  const m = /^#(profile|settings)$/.exec(location.hash);
+  if (m) openSettings(false, m[1]); else closeSettings();
+  if (location.hash !== '#chat' && !m) closeChatView();
 });
 async function fillSettings() {
   const p = await getProfile(me.id, true);
   if (!p) throw new Error('профиль не найден');
-  txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—');
   $('pName').value = p.display_name || ''; $('pNick').value = p.username || ''; $('pBio').value = p.bio || ''; $('pLetter').value = p.avatar_letter || ''; $('pLetter').disabled = !profileExt; txt($('bioCount'), String($('pBio').value.length));
   pickedColor = p.avatar_color || null;
   const ext = !!profileExt;
@@ -758,7 +795,7 @@ async function onSession(session) {
   if (me) {
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles();
-    if (location.hash === '#settings') openSettings(false);
+    { const m = /^#(profile|settings)$/.exec(location.hash); if (m) openSettings(false, m[1]); else setNav('chats'); }
     e2eStart().then(() => deviceCheck(true));
     loadChats();
   } else { currentChat = null; $('app').classList.remove('in-chat', 'in-settings'); qrFails = 0; startQr(); }

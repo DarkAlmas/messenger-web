@@ -1,7 +1,7 @@
 // Сквозное шифрование на сайте: официальный libsignal (Rust), собранный в WASM (vendor/sigwasm).
 // Протокол и формат — как в Android-клиенте (E2eCore/E2eGroup): X3DH/PQXDH + Double Ratchet, Kyber-1024, Sender Keys.
 // Своей криптографии здесь нет.
-import initWasm, { Store, distId, compareScannable } from './vendor/sigwasm/sigwasm.js?v=20261014g';
+import initWasm, { Store, distId, compareScannable } from './vendor/sigwasm/sigwasm.js?v=20261014k';
 
 const OTK_BATCH = 100, OTK_LOW = 20, CLAIM_TTL = 10 * 60 * 1000;
 let sb, store = null, kv = {}, db, uid = null, ready = null;
@@ -50,21 +50,36 @@ const chk = ({ data, error }) => { if (error) throw error; return data; };
 export const deviceId = () => kv.dev || null;
 
 export function init(client) { sb = client; }
+export class KeysLost extends Error {}
+const keysLost = why => { const e = new KeysLost('Ключи шифрования этого устройства не загрузились (' + why + '). Новые ключи НЕ создаются автоматически, чтобы не сломать переписку. Обновите страницу; если не поможет — выйдите и войдите снова.'); e.userMsg = e.message; return e; };
 
 /** Ключи для текущей сессии (session_id = device_id), публикация, пополнение одноразовых prekey. */
 export function ensureReady() {
   if (!ready) ready = locked(async () => {
-    await initWasm({ module_or_path: new URL('./vendor/sigwasm/sigwasm_bg.wasm?v=20261014g', import.meta.url) });
-    if (!db) { db = await idb(); await syncFromDb(); }
+    await initWasm({ module_or_path: new URL('./vendor/sigwasm/sigwasm_bg.wasm?v=20261014k', import.meta.url) });
+    if (!db) {
+      try { db = await idb(); await syncFromDb(); }
+      catch (err) { db = null; console.error(err); throw keysLost('хранилище браузера (IndexedDB) недоступно: ' + ((err && err.message) || err)); }
+    }
     const s = await token(); uid = s.user.id;
     const dev = sessionId(s.access_token);
-    if (kv.dev !== dev || kv.uid !== uid || !kv.state) {
+    if (kv.dev === dev && kv.uid === uid && !kv.state) throw keysLost('локальное хранилище ключей повреждено (нет состояния)');
+    if (kv.dev !== dev || kv.uid !== uid) {
+      // Новые ключи — только для новой сессии. Если сервер уже знает это устройство, а локальных ключей нет
+      // (хранилище браузера очищено/сбой IndexedDB), молча не генерируем: собеседники увидели бы «ключ изменился».
+      if (!kv.dev || kv.dev === dev) {
+        const { data: row, error } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
+        if (error) throw error;
+        if (row) throw keysLost('ключи этого устройства есть на сервере, но не найдены в браузере');
+      }
       // Новая сессия = новое устройство; доверие (trust/verified) к собеседникам того же пользователя сохраняем
       const keepTrust = kv.uid === uid;
       for (const k of Object.keys(kv)) if (!(keepTrust && (k.startsWith('trust:') || k.startsWith('pending:') || k.startsWith('verified:')))) await del(k);
       store = Store.newDevice();
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
-    } else store = Store.load(kv.state);
+    } else {
+      try { store = Store.load(kv.state); } catch (err) { console.error(err); throw keysLost('не удалось прочитать сохранённые ключи'); }
+    }
     await publish(dev);
     await topUp();
     return dev;
@@ -119,8 +134,9 @@ async function devicesFor(user) {
       if (o.device_id === kv.dev || !o.kyber_prekey) continue;
       try { if (Store.verifyRow(JSON.stringify(o))) valid[o.device_id] = o; } catch { /* битая строка — пропускаем */ }
     }
-    for (const d of Object.keys(trust)) if (!valid[d]) delete trust[d];
-    const pending = jget('pending:' + user), first = kv['trust:' + user] == null;
+    // Пустой ответ (собеседник без ключей, лимит, сбой) доверие НЕ сбрасывает; устройство убираем, только если сервер вернул другие устройства
+    if (Object.keys(valid).length) for (const d of Object.keys(trust)) if (!valid[d]) delete trust[d];
+    const pending = jget('pending:' + user), first = !Object.keys(trust).length && kv['verified:' + user] == null;
     for (const [d, o] of Object.entries(valid)) {
       if (first) trust[d] = o.identity_pub; else if (trust[d] !== o.identity_pub) pending[d] = o.identity_pub;
     }

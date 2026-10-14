@@ -102,3 +102,15 @@ dialog::backdrop{background:#0009}
 #notice{position:fixed;top:0;left:0;right:0;z-index:50;background:#8a1f24;color:#fff;padding:10px 48px 10px 14px;font-size:14px;box-shadow:var(--shadow)}
 #notice button{position:absolute;right:6px;top:4px;background:none;padding:6px 10px;min-height:0}
 input.short{max-width:120px}
+
+/* нижняя панель: только иконки */
+#bottomNav{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;justify-content:space-around;align-items:center;height:calc(60px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);background:var(--panel);border-top:1px solid var(--line)}
+#bottomNav button{background:none;color:var(--muted);width:56px;height:44px;padding:0;border-radius:14px;display:flex;align-items:center;justify-content:center}
+#bottomNav button:hover{background:var(--panel2)}
+#bottomNav svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+#bottomNav button[aria-current=page]{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+#bottomNav button[aria-current=page] svg{stroke-width:2.3}
+#side,#settings{padding-bottom:calc(60px + env(safe-area-inset-bottom))}
+#app.in-chat:not(.in-settings) #bottomNav{display:none}
+@media(min-width:760px){#bottomNav{right:auto;width:340px;border-right:1px solid var(--line)}#app.in-chat:not(.in-settings) #bottomNav{display:flex}#settings{padding-bottom:0}}
+.older{align-self:center;margin:4px 0 10px;font-size:14px;min-height:36px;padding:6px 14px}
