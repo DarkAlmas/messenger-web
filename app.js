@@ -665,6 +665,7 @@ async function doForward(target) {
 }
 
 // ---------- «в сети» / «был(а) в сети» и «печатает…» ----------
+// «в сети» берётся ТОЛЬКО из get_last_seen (сервер применяет last_seen_visibility и блокировки; null → «был(а) недавно»). Не выводить онлайн из presence/broadcast/typing.
 let lastSeen = null, typingUntil = 0, typingWho = null, lastTypingSent = 0;
 async function touchPresence() { if (me && document.visibilityState === 'visible') await sb.rpc('touch_presence').then(() => {}, () => {}); }
 setInterval(touchPresence, 60000);
