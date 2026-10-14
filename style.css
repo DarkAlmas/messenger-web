@@ -225,3 +225,8 @@ input,textarea{border-radius:var(--radius-field);background:var(--color-surface-
 button{border-radius:var(--radius-button)}
 .seg button{border-radius:9px}
 .ava{color:#fff}
+/* узкий экран: ничего не вылезает за ширину */
+#app{grid-template-columns:minmax(0,1fr)}
+@media(min-width:760px){#app{grid-template-columns:340px minmax(0,1fr)}}
+#chatPane,#chatHead,.peer{min-width:0}
+@media(max-width:600px){#safetyBtn{max-width:26px;overflow:hidden;white-space:nowrap;flex:none}}
