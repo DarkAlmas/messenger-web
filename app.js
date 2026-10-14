@@ -659,6 +659,7 @@ $('msgInput').addEventListener('input', () => {
 });
 function onTyping(p) {
   if (!p || !p.u || p.u === me.id) return;
+  if (p.stop) { typingUntil = 0; return paintSub(); }
   typingUntil = Date.now() + 5000; typingWho = profiles[p.u] ? displayName(profiles[p.u]) : null; paintSub();
 }
 
@@ -819,7 +820,7 @@ $('sendForm').onsubmit = async e => {
     return;
   }
   $('msgInput').value = ''; cancelCompose();
-  try { await sendPayload(chat, JSON.stringify({ v: 1, t: body }), rt ? { reply_to: rt } : null); }
+  try { await sendPayload(chat, JSON.stringify({ v: 1, t: body }), rt ? { reply_to: rt } : null); if (chan) chan.send({ type: 'broadcast', event: 'typing', payload: { u: me.id, stop: true } }).catch(() => {}); lastTypingSent = 0; }
   catch (err) { $('msgInput').value = body; if (rt) startReply(rt); alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
 };
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
