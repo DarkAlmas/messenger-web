@@ -447,6 +447,7 @@ async function renderMsg(m, d) {
   foot.append(lock, tm);
   if (mine) { const t = document.createElement('span'); t.className = 'ticks'; foot.append(t); }
   d.append(foot);
+  paintReacts(m.id, d);
   if (mine) paintTicks(d);
   if (!d.dataset.wired) { d.dataset.wired = '1'; wireMsg(d); }
   // цитаты, ссылающиеся на это сообщение, обновляем
@@ -454,6 +455,47 @@ async function renderMsg(m, d) {
   sepsSoon();
 }
 const msgData = {}; // id → { m, pl }
+// ---------- реакции (таблица reactions: message_id, user_id, emoji — как в приложении) ----------
+const REACT_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+const reacts = {}; // id → [{user_id, emoji}]
+function paintReacts(id, d) {
+  d = d || msgEls[id]; if (!d) return;
+  let box = d.querySelector(':scope > .reacts'); const list = reacts[id] || [];
+  if (!list.length) { if (box) box.remove(); return; }
+  if (!box) { box = document.createElement('div'); box.className = 'reacts'; d.insertBefore(box, d.querySelector(':scope > .foot')); }
+  box.textContent = '';
+  const by = new Map();
+  for (const r of list) { const x = by.get(r.emoji) || { n: 0, mine: false }; x.n++; if (r.user_id === me.id) x.mine = true; by.set(r.emoji, x); }
+  for (const [e, x] of by) {
+    const c = document.createElement('button'); c.type = 'button'; c.className = 'react' + (x.mine ? ' mine' : '');
+    c.title = x.mine ? 'Убрать реакцию' : 'Поставить реакцию'; txt(c, e + (x.n > 1 ? ' ' + x.n : ''));
+    c.onclick = ev => { ev.stopPropagation(); toggleReact(id, e); };
+    box.append(c);
+  }
+}
+async function loadReacts(ids) {
+  ids = ids.filter(Boolean);
+  for (let i = 0; i < ids.length; i += 80) {
+    const part = ids.slice(i, i + 80);
+    const { data, error } = await sb.from('reactions').select('message_id,user_id,emoji').in('message_id', part).order('created_at', { ascending: true });
+    if (error) { console.warn('reactions', error.message); return; }
+    for (const id of part) reacts[id] = [];
+    for (const r of data || []) reacts[r.message_id].push({ user_id: r.user_id, emoji: r.emoji });
+    for (const id of part) paintReacts(id);
+  }
+}
+let reactTimer = 0;
+function reloadReactsSoon() { clearTimeout(reactTimer); reactTimer = setTimeout(() => loadReacts(Object.keys(msgEls)), 300); }
+async function toggleReact(id, e) {
+  const had = (reacts[id] || []).some(r => r.user_id === me.id && r.emoji === e);
+  const q = had ? sb.from('reactions').delete().eq('message_id', id).eq('user_id', me.id).eq('emoji', e)
+                : sb.from('reactions').insert({ message_id: id, user_id: me.id, emoji: e });
+  const { error } = await q;
+  if (error) return toast('Не удалось изменить реакцию: ' + ruErr(error));
+  if (had) reacts[id] = reacts[id].filter(r => !(r.user_id === me.id && r.emoji === e));
+  else (reacts[id] = reacts[id] || []).push({ user_id: me.id, emoji: e });
+  paintReacts(id);
+}
 function previewOf(id) {
   const x = msgData[id]; if (!x) return 'Сообщение';
   if (!x.pl) return x.m.ciphertext ? '🔒 Зашифрованное сообщение' : (x.m.body || 'Сообщение');
@@ -475,6 +517,8 @@ function msgMenuItems(id) {
   const x = msgData[id]; if (!x) return [];
   const m = x.m, mine = m.sender_id === me.id, items = [];
   items.push({ t: 'Ответить', i: '↩', f: () => startReply(id) });
+  for (const e of REACT_EMOJI) { const had = (reacts[id] || []).some(r => r.user_id === me.id && r.emoji === e); items.push({ t: (had ? 'Убрать ' : 'Реакция ') + e, i: e, f: () => toggleReact(id, e) }); }
+  items.push('-');
   if (x.pl) items.push({ t: 'Переслать', i: '↪', f: () => openForward(id) });
   if (canPin()) items.push(pins.includes(id) ? { t: 'Открепить', i: '📌', f: () => pinMsg(id, false) } : { t: 'Закрепить', i: '📌', f: () => pinMsg(id, true) });
   if (mine && x.pl && !x.pl.f && m.ciphertext) items.push({ t: 'Изменить', i: '✏️', f: () => startEdit(id) });
@@ -687,6 +731,7 @@ async function updMsg(m) { const d = msgEls[m.id]; if (d) await renderMsg(m, d);
 async function openChat(c, li) {
   currentChat = c; readState = {}; lastMarked = 0; pins = []; pinIdx = 0; jumpUnread = 0; lastSeen = undefined; typingUntil = 0; cancelCompose(); closeMenu();
   for (const k of Object.keys(msgData)) delete msgData[k];
+  for (const k of Object.keys(reacts)) delete reacts[k];
   msgData.__openedAt = new Date().toISOString();
   $('pinBar').hidden = true; $('jumpBtn').hidden = true; $('chatMenuBtn').hidden = false; txt($('chatSub'), '');
   document.querySelectorAll('#chatList li').forEach(x => x.classList.remove('active')); li.classList.add('active');
@@ -720,6 +765,9 @@ async function openChat(c, li) {
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, p => { if (p.old && p.old.id && msgEls[p.old.id]) { removeMsgEl(p.old.id); loadChatsSoon(); } })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_pins' }, p => { if (!p.old || !p.old.chat_id || p.old.chat_id === c.id) loadPins(); })
+    // reactions без chat_id: INSERT сверяем с загруженными сообщениями, DELETE приходит только с id — перечитываем
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, p => { const r = p.new; if (r && msgEls[r.message_id] && !(reacts[r.message_id] || []).some(x => x.user_id === r.user_id && x.emoji === r.emoji)) { (reacts[r.message_id] = reacts[r.message_id] || []).push({ user_id: r.user_id, emoji: r.emoji }); paintReacts(r.message_id); } })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, () => reloadReactsSoon())
     .on('broadcast', { event: 'typing' }, p => onTyping(p.payload))
     .subscribe((st, err) => { if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') console.warn('realtime', st, err); });
   if (!c.role) { const { data: r } = await sb.from('chat_members').select('role').eq('chat_id', c.id).eq('user_id', me.id).maybeSingle(); if (r) c.role = r.role; }
@@ -733,6 +781,7 @@ async function openChat(c, li) {
   olderBtn.hidden = !(data && data.length === PAGE);
   if (!(data || []).length) { const p = document.createElement('p'); p.className = 'empty-state'; txt(p, 'Сообщений пока нет. Всё, что вы напишете, будет зашифровано сквозным шифрованием.'); $('messages').append(p); }
   await loadReadState();
+  loadReacts((data || []).map(m => m.id));
   paintPinBar(); redoSeps();
   maybeMarkRead();
 }
@@ -750,6 +799,7 @@ olderBtn.onclick = async () => {
       const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
       btn.after(d); await renderMsg(m, d);
     }
+    loadReacts((data || []).map(m => m.id));
     redoSeps(); box.scrollTop = top0 + (box.scrollHeight - h0); // остаёмся на том же месте
     paintPinBar();
     if (data && data.length) oldestAt = data[data.length - 1].created_at;

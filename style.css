@@ -230,3 +230,6 @@ button{border-radius:var(--radius-button)}
 @media(min-width:760px){#app{grid-template-columns:340px minmax(0,1fr)}}
 #chatPane,#chatHead,.peer{min-width:0}
 @media(max-width:600px){#safetyBtn{max-width:20px;overflow:hidden;white-space:nowrap;flex:none}}
+.msg .reacts{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.msg .react{font:inherit;font-size:13px;line-height:1;padding:3px 7px;border-radius:999px;border:1px solid var(--border,rgba(127,127,127,.3));background:rgba(127,127,127,.12);color:inherit;cursor:pointer}
+.msg .react.mine{border-color:var(--accent,#3390ec);background:rgba(51,144,236,.18)}
