@@ -220,7 +220,7 @@ async function loadChats() {
     const tm = document.createElement('span'); tm.className = 'time'; txt(tm, c.last_sender ? fmtListTime(c.last_at) : ''); side.append(tm);
     const fl = document.createElement('span'); fl.className = 'flags';
     if (isMuted(c)) { const s = document.createElement('span'); s.title = 'Без звука'; txt(s, '🔕'); fl.append(s); }
-    if (c.unread > 0 && !(currentChat && currentChat.id === c.id)) { const b = document.createElement('span'); b.className = 'badge' + (isMuted(c) ? ' muted' : ''); txt(b, c.unread > 99 ? '99+' : String(c.unread)); fl.append(b); }
+    if (c.unread > 0 && !(currentChat && currentChat.id === c.id)) { li.classList.add('unread'); const b = document.createElement('span'); b.className = 'badge' + (isMuted(c) ? ' muted' : ''); txt(b, c.unread > 99 ? '99+' : String(c.unread)); fl.append(b); }
     else if (c.pinned) { const s = document.createElement('span'); s.className = 'pin-flag'; s.title = 'Закреплён'; txt(s, '📌'); fl.append(s); }
     side.append(fl); li.append(side);
     if (currentChat && currentChat.id === c.id) li.classList.add('active');
@@ -302,7 +302,7 @@ async function getProfile(id, fresh) {
 }
 function displayName(p) { return p ? (p.display_name || '@' + p.username) : 'неизвестный'; }
 async function nameOf(id) { const p = await getProfile(id); return p ? displayName(p) : 'неизвестный'; }
-const COLORS = ['#e17076', '#eda86c', '#a695e7', '#7bc862', '#6ec9cb', '#65aadd', '#ee7aae', '#5b7a99'];
+const COLORS = ['#5c6bc0', '#26a69a', '#ef6c00', '#ab47bc', '#42a5f5', '#ec407a', '#7cb342', '#8d6e63']; // как Ui.AVATAR в Android (docs/design)
 function colorFor(p) {
   if (p && /^#[0-9a-f]{6}$/.test(p.avatar_color || '')) return p.avatar_color;
   let h = 0; for (const ch of String(p && p.id || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -384,7 +384,7 @@ const ctSig = c => c && (c.sk || Object.values(c).map(x => x && x.b).sort()[0]);
 function parsePayload(pt) {
   let o; try { o = JSON.parse(pt); } catch { return { t: pt }; }
   if (!o || typeof o !== 'object') return { t: String(pt) };
-  return { t: o.t || '', f: o.f && typeof o.f === 'object' ? o.f : null };
+  return { t: o.t || '', f: o.f && typeof o.f === 'object' ? o.f : null, fw: typeof o.fw === 'string' ? o.fw.slice(0, 64) : null };
 }
 async function decryptPayload(m) {
   const sig = ctSig(m.ciphertext);
@@ -405,7 +405,7 @@ const fmtTime = t => new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', 
 async function renderMsg(m, d) {
   const mine = m.sender_id === me.id;
   d.className = 'msg' + (mine ? ' mine' : '');
-  d.dataset.at = m.created_at;
+  d.dataset.at = m.created_at; d.dataset.sender = m.sender_id || '';
   d.textContent = '';
   const small = document.createElement('small');
   if (!mine && currentChat && currentChat.kind !== 'direct') txt(small, m.sender_id ? await nameOf(m.sender_id) : 'удалённый аккаунт');
@@ -434,7 +434,7 @@ async function renderMsg(m, d) {
     lock.className = 'noe2e'; lock.title = 'Старое сообщение без шифрования'; txt(lock, '⚠ без шифрования');
   }
   msgData[m.id] = { m, pl: pl && !pl.other && !pl.fail ? pl : null };
-  if (m.forwarded) { const f = document.createElement('span'); f.className = 'fwd'; txt(f, '↪ Переслано'); d.insertBefore(f, small.textContent ? small.nextSibling : d.firstChild); }
+  if (m.forwarded) { const f = document.createElement('span'); f.className = 'fwd'; txt(f, '↪ Переслано' + (pl && pl.fw ? ' от ' + pl.fw : '')); d.insertBefore(f, small.textContent ? small.nextSibling : d.firstChild); }
   if (m.reply_to) {
     const q = document.createElement('span'); q.className = 'reply'; q.dataset.to = m.reply_to;
     fillQuote(q, m.reply_to);
@@ -545,6 +545,9 @@ function redoSeps() {
     const k = new Date(d.dataset.at).toDateString();
     if (k !== prev) { const s = document.createElement('div'); s.className = 'date-sep'; txt(s, dayLabel(d.dataset.at)); d.before(s); prev = k; }
   }
+  // хвостик — у последнего сообщения в серии одного отправителя
+  const all = [...box.querySelectorAll('.msg')];
+  all.forEach((d, i) => { const n = all[i + 1]; d.classList.toggle('tail', !n || n.dataset.sender !== d.dataset.sender || n.previousElementSibling !== d); });
 }
 
 // ---------- кнопка «вниз» со счётчиком новых ----------
@@ -605,10 +608,12 @@ async function doForward(target) {
   const x = msgData[fwdId]; $('fwdDlg').close(); if (!x || !x.pl) return;
   try {
     toast('Пересылаем…');
+    // Имя автора оригинала — только внутри зашифрованного payload; шифротекст и файловые ключи не переиспользуются
+    const fw = x.pl.fw || (x.m.sender_id === me.id ? displayName(profiles[me.id]) : (profiles[x.m.sender_id] ? displayName(profiles[x.m.sender_id]) : 'неизвестный'));
     if (x.pl.f) {
-      const plain = await fetchFilePlain(x.pl.f);
-      await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.t || '');
-    } else await sendPayload(target, JSON.stringify({ v: 1, t: x.pl.t }), { forwarded: true });
+      const plain = await fetchFilePlain(x.pl.f); // расшифровали — и ниже заново шифруем новым ключом AES и для нового чата
+      await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.t || '', fw);
+    } else await sendPayload(target, JSON.stringify({ v: 1, t: x.pl.t, fw }), { forwarded: true });
     toast('Переслано');
     if (!currentChat || currentChat.id !== target.id) loadChatsSoon();
   } catch (e) { alert(e.userMsg || ruErr(e)); }
@@ -638,7 +643,8 @@ async function loadLastSeen() {
 function paintSub() {
   const s = $('chatSub'); s.className = '';
   if (!currentChat) return txt(s, '');
-  if (Date.now() < typingUntil) { s.className = 'typing'; return txt(s, (currentChat.kind === 'direct' ? '' : (typingWho ? typingWho + ' ' : '')) + 'печатает…'); }
+  if (Date.now() < typingUntil) { s.className = 'typing'; txt(s, (currentChat.kind === 'direct' ? '' : (typingWho ? typingWho + ' ' : '')) + 'печатает'); const d = document.createElement('span'); d.className = 'typing-dots'; d.setAttribute('aria-hidden', 'true'); d.append(document.createElement('i'), document.createElement('i'), document.createElement('i')); s.append(d); s.setAttribute('aria-label', s.textContent + '…'); return; }
+  s.removeAttribute('aria-label');
   if (currentChat.kind !== 'direct') return txt(s, 'группа');
   if (lastSeen === undefined) return txt(s, '');
   const t = seenText(lastSeen); if (t === 'в сети') s.className = 'online'; txt(s, t);
@@ -899,7 +905,7 @@ $('fileInput').onchange = async () => {
   catch (e) { alert(e.userMsg || ruErr(e)); }
   finally { btn.disabled = false; txt(btn, '📎'); }
 };
-async function sendFile(chat, file, extra, caption) {
+async function sendFile(chat, file, extra, caption, fw) {
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
   const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
   if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
@@ -909,7 +915,7 @@ async function sendFile(chat, file, extra, caption) {
   const { error } = await sb.storage.from('chat-files').upload(path, new Blob([enc.ct], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: false });
   if (error) throw error;
   const f = { p: path, n: safeName(file.name), s: plain.length, m: file.type || '', k: enc.k, iv: enc.iv, h: enc.h };
-  try { await sendPayload(chat, JSON.stringify({ v: 1, t: caption || '', f }), extra); }
+  try { await sendPayload(chat, JSON.stringify(fw ? { v: 1, t: caption || '', f, fw } : { v: 1, t: caption || '', f }), extra); }
   catch (e) { await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e; }
 }
 async function fetchFilePlain(f) {
@@ -1010,11 +1016,11 @@ function applyTheme(t) {
   if (!(t in THEMES)) t = 'system';
   if (THEMES[t]) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
   try { t === 'system' ? localStorage.removeItem('msgr-theme') : localStorage.setItem('msgr-theme', t); } catch { /* нет localStorage */ }
-  document.querySelectorAll('#themeSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
+  document.querySelectorAll('#themeSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === t)));
   const dark = THEMES[t] ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
   document.querySelector('meta[name=theme-color]').content = dark ? '#0f1720' : '#eef2f6';
 }
-document.querySelectorAll('#themeSeg button').forEach(b => { b.onclick = () => applyTheme(b.dataset.theme); });
+document.querySelectorAll('#themeSeg button').forEach(b => { b.onclick = () => applyTheme(b.dataset.mode); });
 applyTheme((() => { try { return localStorage.getItem('msgr-theme') || 'system'; } catch { return 'system'; } })());
 let pickedColor = null;
 let tab = 'chats';

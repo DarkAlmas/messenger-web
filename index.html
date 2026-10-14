@@ -8,8 +8,9 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: blob: https://tbbaztmtkcrzxnkkmtqv.supabase.co; connect-src 'self' https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; base-uri 'none'; form-action 'none';">
 <title>Мессенджер</title>
 <link rel="icon" href="data:,">
-<script src="theme.js?v=20261015a"></script>
-<link rel="stylesheet" href="style.css?v=20261015a">
+<link rel="stylesheet" href="tokens.css?v=20261015b">
+<script src="theme.js?v=20261015b"></script>
+<link rel="stylesheet" href="style.css?v=20261015b">
 </head>
 <body>
 <div id="notice" role="alert" hidden><span id="noticeText"></span><button type="button" id="noticeClose" aria-label="Закрыть">✕</button></div>
@@ -100,7 +101,7 @@
       <div class="group" data-tab="settings">
         <h3>Оформление</h3>
         <div class="seg" id="themeSeg" role="radiogroup">
-          <button type="button" data-theme="system">Как в системе</button><button type="button" data-theme="dark">Тёмная</button><button type="button" data-theme="light">Светлая</button>
+          <button type="button" data-mode="system">Как в системе</button><button type="button" data-mode="dark">Тёмная</button><button type="button" data-mode="light">Светлая</button>
         </div>
       </div>
       <div class="group" data-tab="settings">
@@ -119,9 +120,9 @@
     </div>
   </section>
   <nav id="bottomNav" aria-label="Разделы">
-    <button type="button" data-nav="chats" aria-label="Чаты" title="Чаты"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg></button>
-    <button type="button" data-nav="profile" aria-label="Профиль" title="Профиль"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></button>
-    <button type="button" data-nav="settings" aria-label="Настройки" title="Настройки"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
+    <button type="button" data-nav="chats" aria-label="Чаты" title="Чаты"><span class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg></span></button>
+    <button type="button" data-nav="profile" aria-label="Профиль" title="Профиль"><span class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></span></button>
+    <button type="button" data-nav="settings" aria-label="Настройки" title="Настройки"><span class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></span></button>
   </nav>
 </section>
 <div id="ctxMenu" role="menu" hidden></div>
@@ -154,7 +155,7 @@
 </dialog>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
-<script src="config.js?v=20261015a"></script>
-<script src="app.js?v=20261015a"></script>
+<script src="config.js?v=20261015b"></script>
+<script src="app.js?v=20261015b"></script>
 </body>
 </html>
