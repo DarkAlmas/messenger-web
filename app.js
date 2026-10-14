@@ -670,15 +670,20 @@ let lastSeen = null, typingUntil = 0, typingWho = null, lastTypingSent = 0;
 async function touchPresence() { if (me && document.visibilityState === 'visible') await sb.rpc('touch_presence').then(() => {}, () => {}); }
 setInterval(touchPresence, 60000);
 document.addEventListener('visibilitychange', touchPresence);
-function seenText(t) {
+const MON_SHORT = ['янв.', 'февр.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сент.', 'окт.', 'нояб.', 'дек.'];
+// Спецификация Design Bot; время локальное. now — для проверок.
+function seenText(t, now = new Date()) {
   if (!t) return 'был(а) недавно';
-  const d = new Date(t), mins = Math.floor((Date.now() - d) / 60000);
-  if (mins < 2) return 'в сети';
-  if (mins < 60) return 'был(а) в сети ' + mins + ' ' + plural(mins, 'минуту', 'минуты', 'минут') + ' назад';
-  const n = new Date(), y = new Date(n - 864e5);
-  if (d.toDateString() === n.toDateString()) return 'был(а) в сети сегодня в ' + fmtTime(t);
-  if (d.toDateString() === y.toDateString()) return 'был(а) в сети вчера в ' + fmtTime(t);
-  return 'был(а) в сети ' + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const d = new Date(t); if (isNaN(d)) return 'был(а) недавно';
+  const ms = now - d, p2 = x => String(x).padStart(2, '0'), hm = p2(d.getHours()) + ':' + p2(d.getMinutes());
+  if (ms < 120000) return 'в сети'; // в т.ч. небольшой сдвиг часов «в будущее»
+  if (ms < 3600000) return 'был(а) ' + Math.floor(ms / 60000) + ' мин. назад';
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const today = day(now), dd = day(d);
+  if (dd === today) return 'был(а) в ' + hm;
+  if (dd === day(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))) return 'был(а) вчера в ' + hm;
+  if (d.getFullYear() === now.getFullYear()) return 'был(а) ' + d.getDate() + ' ' + MON_SHORT[d.getMonth()] + ' в ' + hm;
+  return 'был(а) ' + p2(d.getDate()) + '.' + p2(d.getMonth() + 1) + '.' + d.getFullYear();
 }
 async function loadLastSeen() {
   const c = currentChat; if (!c || c.kind !== 'direct' || !peerId) return paintSub();
