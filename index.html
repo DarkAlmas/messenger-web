@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data:; connect-src https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<title>Мессенджер</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<section id="auth" class="screen">
+  <div class="card">
+    <h1>Мессенджер</h1>
+    <div class="auth-grid">
+      <div>
+        <h2>Вход по QR</h2>
+        <div id="qr" class="qr"></div>
+        <p id="qrStatus" class="hint">Откройте приложение на телефоне и отсканируйте код. Входите только если сами только что открыли этот QR.</p>
+      </div>
+      <form id="loginForm">
+        <h2 id="formTitle">Почта и пароль</h2>
+        <input id="email" type="email" placeholder="Почта" required autocomplete="username">
+        <input id="password" type="password" placeholder="Пароль" required minlength="10" autocomplete="current-password">
+        <input id="username" placeholder="Никнейм (a-z, 0-9, _)" pattern="[a-z0-9_]{3,32}" hidden>
+        <button type="submit" id="loginBtn">Войти</button>
+        <button type="button" id="toggleReg" class="link">Нет аккаунта? Регистрация</button>
+        <p id="authMsg" class="hint"></p>
+      </form>
+    </div>
+  </div>
+</section>
+<section id="app" class="screen" hidden>
+  <aside>
+    <header><b id="me"></b><button id="logout" class="link">Выйти</button></header>
+    <div class="actions">
+      <input id="findUser" placeholder="Никнейм для нового чата">
+      <button id="newDirect">Написать</button>
+    </div>
+    <ul id="chatList"></ul>
+  </aside>
+  <main>
+    <header id="chatTitle">Выберите чат</header>
+    <div id="messages"></div>
+    <form id="sendForm" hidden>
+      <input id="msgInput" maxlength="4000" placeholder="Сообщение" autocomplete="off">
+      <button>Отправить</button>
+    </form>
+  </main>
+</section>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
