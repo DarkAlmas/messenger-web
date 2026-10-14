@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data:; connect-src https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data:; connect-src https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; base-uri 'none'; form-action 'none';">
 <title>Мессенджер</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,13 +16,20 @@
       <div>
         <h2>Вход по QR</h2>
         <div id="qr" class="qr"></div>
-        <p id="qrStatus" class="hint">Откройте приложение на телефоне и отсканируйте код. Входите только если сами только что открыли этот QR.</p>
+        <p id="qrStatus" class="hint" aria-live="polite">Загрузка QR…</p>
+        <p id="qrTimerText" class="hint"></p>
+        <button type="button" id="qrRetry" hidden>Обновить QR</button>
       </div>
-      <form id="loginForm">
+      <form id="loginForm" novalidate>
         <h2 id="formTitle">Почта и пароль</h2>
-        <input id="email" type="email" placeholder="Почта" required autocomplete="username">
-        <input id="password" type="password" placeholder="Пароль" required minlength="10" autocomplete="current-password">
-        <input id="username" placeholder="Никнейм (a-z, 0-9, _)" pattern="[a-z0-9_]{3,32}" hidden>
+        <label for="email">Почта</label>
+        <input id="email" type="email" placeholder="name@example.com" autocomplete="username">
+        <label for="password">Пароль</label>
+        <input id="password" type="password" autocomplete="current-password">
+        <p id="pwHint" class="hint small" hidden>Не меньше 10 символов</p>
+        <label for="username" id="usernameLabel" hidden>Никнейм</label>
+        <input id="username" pattern="[a-z0-9_]{3,32}" hidden>
+        <p id="userHint" class="hint small" hidden>3–32 символа: латинские буквы a-z, цифры 0-9 и _</p>
         <button type="submit" id="loginBtn">Войти</button>
         <button type="button" id="toggleReg" class="link">Нет аккаунта? Регистрация</button>
         <p id="authMsg" class="hint"></p>
@@ -33,7 +41,7 @@
   <aside>
     <header><b id="me"></b><button id="logout" class="link">Выйти</button></header>
     <div class="actions">
-      <input id="findUser" placeholder="Никнейм для нового чата">
+      <input id="findUser" placeholder="Никнейм (можно с @)">
       <button id="newDirect">Написать</button>
     </div>
     <ul id="chatList"></ul>

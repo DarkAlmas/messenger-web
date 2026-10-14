@@ -21,3 +21,14 @@ main{display:flex;flex-direction:column;min-height:0}
 .msg small{display:block;color:#8ea0b3;font-size:11px}
 #sendForm{display:flex;gap:6px;padding:10px;border-top:1px solid #22303f}#sendForm input{margin:0}
 .msg .e2e { font-style: italic; opacity: .75; }
+
+label{display:block;font-size:13px;color:#8ea0b3;margin-top:8px}
+.hint.small{font-size:12px;margin:0 0 4px}
+.qr{width:229px;height:229px;display:flex;align-items:center;justify-content:center}
+.qr.empty{background:#22303f;color:#8ea0b3;font-size:14px}
+.qr svg{width:205px;height:205px}
+#qrStatus{min-height:3.6em}#qrTimerText{min-height:1.3em;margin:0 0 8px}
+#loginBtn{width:100%;min-height:44px;margin-top:10px;font-size:16px}
+#toggleReg{display:block;min-height:44px;margin-top:8px;font-size:15px}
+button:disabled{opacity:.6;cursor:default}
+@media(max-width:640px){.hint{font-size:15px}input{font-size:16px;min-height:44px}#qrRetry{min-height:44px}}
