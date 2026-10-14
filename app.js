@@ -481,7 +481,7 @@ async function loadReacts(ids) {
   ids = ids.filter(Boolean);
   for (let i = 0; i < ids.length; i += 80) {
     const part = ids.slice(i, i + 80);
-    const { data, error } = await sb.from('reactions').select('id,message_id,user_id,emoji').in('message_id', part).order('created_at', { ascending: true });
+    const { data, error } = await sb.from('reactions').select('message_id,user_id,emoji').in('message_id', part).order('created_at', { ascending: true });
     if (error) { console.warn('reactions', error.message); return; }
     for (const id of part) reacts[id] = [];
     for (const r of data || []) addReact(r, false);
@@ -493,19 +493,18 @@ function reloadReactsSoon() { clearTimeout(reactTimer); reactTimer = setTimeout(
 async function toggleReact(id, e) {
   const had = (reacts[id] || []).some(r => r.user_id === me.id && r.emoji === e);
   const q = had ? sb.from('reactions').delete().eq('message_id', id).eq('user_id', me.id).eq('emoji', e)
-                : sb.from('reactions').insert({ message_id: id, user_id: me.id, emoji: e }).select('id,message_id,user_id,emoji');
-  const { data, error } = await q;
+                : sb.from('reactions').insert({ message_id: id, user_id: me.id, emoji: e });
+  const { error } = await q;
   if (error) return toast('Не удалось изменить реакцию: ' + ruErr(error));
   if (had) { reacts[id] = (reacts[id] || []).filter(r => !(r.user_id === me.id && r.emoji === e)); paintReacts(id); }
-  else addReact((data && data[0]) || { message_id: id, user_id: me.id, emoji: e });
+  else addReact({ message_id: id, user_id: me.id, emoji: e });
 }
-// Одна реакция = один (message_id, user_id, emoji); дубликат из Realtime и из ответа REST отбрасываем
+// Ключ реакции — (message_id, user_id, emoji) (PK таблицы, id нет); дубликат из Realtime и из ответа REST отбрасываем
 function addReact(r, paint = true) {
   if (!r || !r.message_id) return;
   const list = reacts[r.message_id] = reacts[r.message_id] || [];
-  const ex = list.find(x => (r.id && x.id === r.id) || (x.user_id === r.user_id && x.emoji === r.emoji));
-  if (ex) { if (r.id && !ex.id) ex.id = r.id; return; }
-  list.push({ id: r.id, user_id: r.user_id, emoji: r.emoji });
+  if (list.some(x => x.user_id === r.user_id && x.emoji === r.emoji)) return;
+  list.push({ user_id: r.user_id, emoji: r.emoji });
   if (paint) paintReacts(r.message_id);
 }
 function previewOf(id) {
