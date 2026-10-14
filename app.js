@@ -708,7 +708,10 @@ async function openChat(c, li) {
   }
   if (currentChat !== c) return;
   if (chan) sb.removeChannel(chan);
-  chan = sb.channel('chat-' + c.id)
+  // Приватный канал: broadcast «печатает» доступен только участникам чата (политики realtime.messages на сервере)
+  await rtAuth();
+  if (currentChat !== c) return;
+  chan = sb.channel('chat-' + c.id, { config: { private: true } })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => onIncoming(p.new))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => updMsg(p.new))
     // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
@@ -718,7 +721,7 @@ async function openChat(c, li) {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_pins' }, p => { if (!p.old || !p.old.chat_id || p.old.chat_id === c.id) loadPins(); })
     .on('broadcast', { event: 'typing' }, p => onTyping(p.payload))
-    .subscribe();
+    .subscribe((st, err) => { if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') console.warn('realtime', st, err); });
   if (!c.role) { const { data: r } = await sb.from('chat_members').select('role').eq('chat_id', c.id).eq('user_id', me.id).maybeSingle(); if (r) c.role = r.role; }
   loadPins(); loadLastSeen(); paintSub();
   $('messages').prepend(olderBtn); olderBtn.hidden = true; oldestAt = null;
@@ -1149,5 +1152,9 @@ async function onSession(session) {
     loadChats();
   } else { currentChat = null; $('app').classList.remove('in-chat', 'in-settings'); qrFails = 0; startQr(); }
 }
-sb.auth.onAuthStateChange((_e, s) => onSession(s));
+async function rtAuth(token) {
+  try { if (!token) { const { data } = await sb.auth.getSession(); token = data.session && data.session.access_token; } if (token) await sb.realtime.setAuth(token); }
+  catch (e) { console.warn('realtime setAuth', e); }
+}
+sb.auth.onAuthStateChange((e, s) => { if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token); onSession(s); });
 sb.auth.getSession().then(({ data }) => onSession(data.session));
