@@ -63,7 +63,17 @@ $('loginForm').onsubmit = async e => {
   finally { btn.disabled = false; }
 };
 ['email','password','username'].forEach(id => $(id).addEventListener('input', () => txt($('authMsg'), '')));
-window.addEventListener('online', () => { txt($('authMsg'), ''); if (!me && qrFails) { qrFails = 0; startQr(); } });
+const NET_ERR = 'Нет соединения с сервером';
+function netBack() {
+  if ($('authMsg').textContent.startsWith(NET_ERR)) txt($('authMsg'), '');
+  if (!me && qrFails && $('qrStatus').textContent.startsWith('Нет соединения')) { qrFails = 0; startQr(); }
+}
+window.addEventListener('online', netBack);
+// Событие online срабатывает не везде: пока висит ошибка сети, раз в 5 с проверяем сервер
+setInterval(async () => {
+  if (!$('authMsg').textContent.startsWith(NET_ERR) && !$('qrStatus').textContent.startsWith('Нет соединения')) return;
+  try { const r = await fetch(`${C.SUPABASE_URL}/auth/v1/health`, { headers: { apikey: C.SUPABASE_KEY }, cache: 'no-store' }); if (r.status < 500) netBack(); } catch (e) { /* всё ещё нет сети */ }
+}, 5000);
 $('logout').onclick = async () => { try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } };
 
 // ---------- вход по QR ----------
@@ -77,6 +87,7 @@ async function fn(name, body) {
   });
   let j = null; try { j = await r.json(); } catch (e) { /* пустой ответ */ }
   if (!r.ok) { const e = new Error((j && (j.error || j.message)) || ('HTTP ' + r.status)); e.status = r.status; e.retryAfter = +r.headers.get('Retry-After') || 0; throw e; }
+  if ($('authMsg').textContent.startsWith(NET_ERR)) txt($('authMsg'), '');
   return j;
 }
 function stopQr() { qrGen++; clearInterval(qrTimer); clearInterval(qrCountdown); clearTimeout(qrRetryTimer); qrTimer = qrCountdown = qrRetryTimer = null; }

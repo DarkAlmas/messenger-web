@@ -33,3 +33,9 @@ label{display:block;font-size:13px;color:#8ea0b3;margin-top:8px}
 button:disabled{opacity:.6;cursor:default}
 @media(max-width:640px){.hint{font-size:15px}input{font-size:16px;min-height:44px}#qrRetry{min-height:44px}}
 .msg .noe2e { display: block; font-size: .75em; color: #b26a00; font-style: normal; margin-top: 2px; }
+/* #11: стабильная высота карточки входа — место под статусы и ошибки зарезервировано */
+#auth .card{min-height:620px;box-sizing:border-box}
+#qrStatus{min-height:3.6em;margin:8px 0 0}
+#qrTimerText{min-height:1.3em;margin:4px 0}
+#qrRetry[hidden]{display:inline-block;visibility:hidden}
+#authMsg{min-height:2.6em}
