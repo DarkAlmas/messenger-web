@@ -229,4 +229,4 @@ button{border-radius:var(--radius-button)}
 #app{grid-template-columns:minmax(0,1fr)}
 @media(min-width:760px){#app{grid-template-columns:340px minmax(0,1fr)}}
 #chatPane,#chatHead,.peer{min-width:0}
-@media(max-width:600px){#safetyBtn{max-width:26px;overflow:hidden;white-space:nowrap;flex:none}}
+@media(max-width:600px){#safetyBtn{max-width:20px;overflow:hidden;white-space:nowrap;flex:none}}
