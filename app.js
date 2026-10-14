@@ -34,8 +34,9 @@ function ruErr(e) {
   if (l.includes('unable to validate email') || l.includes('invalid format') || l.includes('email address') && l.includes('invalid')) return 'Неверный формат почты';
   if (l.includes('rate limit') || l.includes('too many') || l.includes('429')) return 'Слишком много попыток. Подождите немного и попробуйте снова';
   if (l.includes('too big') || l.includes('too large') || l.includes('payload')) return 'Слишком большой размер (сообщение или файл)';
+  if (l.includes('permission denied for function')) return 'Сервер сейчас не даёт сохранить профиль (ошибка прав на сервере). Мы уже знаем о ней — попробуйте позже';
   if (l.includes('reserved')) return 'Этот никнейм зарезервирован';
-  if (l.includes('display_name')) return 'Недопустимое имя (1–64 символа, без управляющих символов)';
+  if (l.includes('display_name') && l.includes('check')) return 'Недопустимое имя (1–64 символа, без управляющих символов)';
   if (l.includes('bucket not found')) return 'Хранилище аватаров ещё не создано на сервере';
   if (l.includes('duplicate key') && l.includes('username')) return 'Этот никнейм уже занят';
   if (l.includes('duplicate key')) return 'Такая запись уже существует';
@@ -261,7 +262,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261014h').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261014i').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
