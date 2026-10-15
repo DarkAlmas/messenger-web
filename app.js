@@ -192,11 +192,13 @@ let lastChats = [], showArchive = false;
 const fmtListTime = t => { const d = new Date(t), n = new Date(); if (d.toDateString() === n.toDateString()) return fmtTime(t); if (n - d < 6 * 864e5) return d.toLocaleDateString('ru-RU', { weekday: 'short' }); return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }); };
 const isMuted = c => c.muted_until && new Date(c.muted_until) > new Date();
 async function loadChats() {
+  if (!me) return; const who = me; // вход/выход во время загрузки: не трогаем me после await
   const ul = $('chatList');
   const [{ data, error }, { data: prefs, error: pe }] = await Promise.all([
     sb.rpc('list_chats'),
     sb.from('chat_members').select('chat_id, pinned, muted_until, archived, role').eq('user_id', me.id)
   ]);
+  if (!me || me.id !== who.id) return;
   if (error || pe) { showErr('Не удалось загрузить чаты: ' + ruErr(error || pe)); return; }
   const pm = {}; for (const p of prefs || []) pm[p.chat_id] = p;
   lastChats = (data || []).map(c => ({ id: c.chat_id, kind: c.kind, title: c.kind === 'direct' ? null : c.title, name: c.title, peer: c.peer_id, last_at: c.last_at, last_sender: c.last_sender, last_has_file: c.last_has_file, unread: c.unread, ...(pm[c.chat_id] || {}) }));
@@ -398,7 +400,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zl').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zm').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -762,7 +764,7 @@ async function loadLastSeen() {
   const c = currentChat; if (!c || c.kind !== 'direct' || !peerId) return paintSub();
   const { data, error } = await sb.rpc('get_last_seen', { p_user: peerId });
   if (currentChat !== c) return;
-  lastSeen = error ? undefined : data; paintSub();
+  lastSeen = error ? undefined : data; paintSub(); paintAllTicks();
 }
 function paintSub() {
   const s = $('chatSub'); s.className = '';
@@ -946,7 +948,12 @@ function isRead(at) {
   const others = Object.values(readState);
   return others.length > 0 && others.every(r => r && new Date(r) >= new Date(at));
 }
-function isDelivered(at) { return currentChat && currentChat.kind === 'direct' && (lastSeen === 'online' || (lastSeen && !isNaN(Date.parse(lastSeen)) && new Date(lastSeen) >= new Date(at))); }
+function isDelivered(at) {
+  if (!currentChat || currentChat.kind !== 'direct' || !lastSeen) return false;
+  if (lastSeen === 'online') return true; if (isNaN(Date.parse(lastSeen))) return false;
+  const ls = new Date(lastSeen).getTime(); // собеседник был в сети после сообщения или в сети сейчас (≤2 мин) — доставлено
+  return ls >= new Date(at).getTime() || (Date.now() - ls < 120000 && new Date(at).getTime() <= Date.now() + 5000);
+}
 function paintTicks(d) {
   const t = d.querySelector('.ticks'); if (!t) return;
   const st = d.dataset.state;
@@ -1003,7 +1010,12 @@ const outbox = {}; // id → задание
 function outBubble(job) {
   const d = document.createElement('div'); d.dataset.id = job.id; msgEls[job.id] = d;
   d.className = 'msg mine'; d.dataset.at = new Date().toISOString(); d.dataset.sender = me.id; d.dataset.state = 'sending';
-  const b = document.createElement('span'); b.className = 'body'; txt(b, job.kind === 'text' ? job.text : (job.caption || job.file.name)); d.append(b);
+  if (job.kind === 'file' && /^image\/(jpeg|png|gif|webp)$/.test(job.file.type || '')) {
+    // локальное превью исходного файла (из выбранного File, на сервер не уходит)
+    const pv = document.createElement('div'); pv.className = 'img-prev'; const im = document.createElement('img'); im.alt = safeName(job.file.name);
+    im.src = job.localUrl = URL.createObjectURL(job.file); pv.append(im); d.append(pv); d.classList.add('has-img'); if (!job.caption) d.classList.add('img-only');
+  }
+  const b = document.createElement('span'); b.className = 'body'; txt(b, job.kind === 'text' ? job.text : (job.caption || (d.classList.contains('has-img') ? '' : job.file.name))); if (!b.textContent) b.hidden = true; d.append(b);
   const foot = document.createElement('div'); foot.className = 'foot';
   const tm = document.createElement('time'); txt(tm, fmtTime(d.dataset.at)); const t = document.createElement('span'); t.className = 'ticks';
   foot.append(tm, t); d.append(foot);
@@ -1020,12 +1032,12 @@ async function outRun(job) {
     const row = had || (job.kind === 'text' ? await sendPayload(job.chat, JSON.stringify({ v: 1, t: job.text }), extra) : await sendFile(job.chat, job.file, extra, job.caption, undefined, job));
     delete outbox[job.id];
     const el = msgEls[job.id];
-    if (el && el.dataset.state) { delete el.dataset.state; if (row && row.created_at) el.dataset.at = row.created_at; paintTicks(el); }
+    if (el) { delete el.dataset.state; if (row && row.created_at) el.dataset.at = row.created_at; paintTicks(el); } // время сервера, не часы клиента
     return true;
   } catch (err) {
     console.warn('send failed', job.id, err);
     const el = msgEls[job.id]; if (el && el.dataset.state) { el.dataset.state = 'failed'; paintTicks(el); }
-    if (!job.toasted) { job.toasted = true; toastLong(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err)); } // тост один раз на сообщение
+    if (!job.toasted && !(err && err.quiet)) { job.toasted = true; toast(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err), 6000); } // тост один раз на сообщение
     return false;
   }
 }
@@ -1035,7 +1047,6 @@ function outMenu(ev, id) {
   openMenu(ev, [{ t: 'Повторить', i: 'refresh', f: () => outRun(job) },
     { t: 'Удалить', i: 'delete', danger: true, f: async () => { // только локальное неотправленное
       if (await onServer(id).catch(() => null)) { toast('Сообщение уже отправлено'); const el = msgEls[id]; if (el) { delete el.dataset.state; paintTicks(el); } delete outbox[id]; return; }
-      if (job.uploaded) sb.storage.from('chat-files').remove([job.uploaded.path]).catch(() => {});
       delete outbox[id]; const el = msgEls[id]; if (el) { el.remove(); delete msgEls[id]; } } }]);
 }
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
@@ -1059,9 +1070,10 @@ async function insertEncrypted(row, pt) {
   const sig = ctSig(row.ciphertext);
   sentOwn[sig] = pt;
   let { data, error } = await sb.from('messages').insert(row).select('id, created_at').single();
-  if (error) { // ответ мог потеряться, а строка — записаться; дубль ключа (23505) = уже на сервере
+  if (error) { // ответ мог потеряться, а строка — записаться; дубль ключа (23505/409) = уже на сервере. upsert не используем
+    const dup = error.code === '23505' || error.status === 409 || /duplicate key/i.test(error.message || '');
     const had = await onServer(row.id).catch(() => null);
-    if (had) { data = had; error = null; }
+    if (had || dup) { data = had || { id: row.id, created_at: null }; error = null; }
   }
   if (error) { delete sentOwn[sig]; throw error; }
   await E2E.rememberOwn(data.id, pt, row.ciphertext.sk);
@@ -1081,6 +1093,12 @@ async function sendPayload(chat, pt, extra) {
   if (chat.kind === 'direct') {
     const peer = await chatPeer(chat);
     if (!peer) throw userErr('Сообщение не отправлено: не удалось определить собеседника.');
+    if (await E2E.sendBlocked(peer)) {
+      const pp = await getProfile(peer).catch(() => null);
+      const go = await askConfirm('Код безопасности ' + (pp && pp.username ? '@' + pp.username : 'собеседника') + ' изменился, а раньше вы его проверяли. Сверьте новый код, прежде чем писать.', 'Всё равно отправить', 'Сверить код');
+      if (!go) { if (peer === peerId) showSafety().catch(() => {}); const e = userErr('Не отправлено: сначала сверьте код безопасности.'); e.quiet = true; throw e; }
+      await E2E.unblockSend(peer);
+    }
     if (!(await E2E.peerHasKeys(peer))) throw userErr('Сообщение не отправлено: у собеседника нет ключей шифрования — он ещё не входил в обновлённое приложение или на сайт. Попросите его войти, затем повторите.' + NO_PLAIN);
     const r = await encryptForPeer(pt, peer);
     if (!r) throw userErr('Сообщение не отправлено: у собеседника больше нет ключей шифрования.' + NO_PLAIN);
@@ -1131,7 +1149,6 @@ $('fileInput').onchange = async () => {
   fileSheet(file);
 };
 async function sendFile(chat, file, extra, caption, fw, job) {
-  if (job && job.uploaded) return sendPayload(chat, job.uploaded.pt, extra);
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
   const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
   if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
@@ -1142,7 +1159,12 @@ async function sendFile(chat, file, extra, caption, fw, job) {
   const f = { p: path, n: safeName(file.name), s: plain.length, m: file.type || '', k: enc.k, iv: enc.iv, h: enc.h };
   // подпись — только внутри зашифрованного payload (поле caption), на сервер открытым текстом не уходит
   const pl = { v: 1, t: '', f }; if (caption) pl.caption = String(caption).slice(0, 4000); if (fw) pl.fw = fw;
-  if (job) { job.uploaded = { path, pt: JSON.stringify(pl) }; return sendPayload(chat, job.uploaded.pt, extra); } // при повторе файл заново не загружаем
+  if (job) {
+    try { return await sendPayload(chat, JSON.stringify(pl), extra); }
+    catch (e) { // вставка не прошла (и это не «уже на сервере») — объект в Storage не оставляем; повтор загрузит заново
+      await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e;
+    }
+  }
   try { return await sendPayload(chat, JSON.stringify(pl), extra); }
   catch (e) { await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e; }
 }
@@ -1259,16 +1281,19 @@ function prevOf(pl) {
 function notePreview(m, pl) {
   const key = m.chat_id + '|' + m.created_at; lastPrev[key] = prevOf(pl);
   const sub = document.querySelector('#chatList li[data-id="' + CSS.escape(m.chat_id) + '"] .sub');
-  if (sub && sub.dataset.key === key) { const v = lastPrev[key]; sub.textContent = ''; if (me && m.sender_id === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); }
+  const curAt = sub && sub.dataset.key ? sub.dataset.key.split('|')[1] : '';
+  if (sub && (sub.dataset.key === key || !curAt || new Date(m.created_at) >= new Date(curAt))) {
+    sub.dataset.key = key; const li = sub.closest('li'); const tm = li && li.querySelector('.time'); if (tm) txt(tm, fmtListTime(m.created_at)); const v = lastPrev[key]; sub.textContent = ''; if (me && m.sender_id === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); }
 }
 async function filePreviewSoon(c, sub) {
-  const key = c.id + '|' + c.last_at;
-  const paint = v => { if (!v || !sub.isConnected) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
+  if (!me) return; const key = c.id + '|' + c.last_at;
+  const paint = v => { if (!v || !sub.isConnected || !me) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
   if (lastPrev[key]) return paint(lastPrev[key]);
   try {
     const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (!data || !data.ciphertext) return;
-    const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other || pl.pending) return;
+    const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other) return;
+    if (pl.pending) { setTimeout(() => { if (sub.isConnected && me) filePreviewSoon(c, sub); }, 16000); return; } // шифрование занято — повторим
     paint(lastPrev[key] = prevOf(pl));
   } catch (e) { /* остаётся «Файл» */ }
 }
@@ -1345,12 +1370,14 @@ async function paintKeyEvents() {
   box.querySelectorAll('.sys-kc').forEach(x => x.remove());
   if (!evs.length) return;
   const p = await getProfile(peerId).catch(() => null); if (currentChat !== c) return;
-  for (const at of evs) {
-    const row = document.createElement('div'); row.className = 'sys-row sys-kc'; row.dataset.at = at; row.setAttribute('role', 'note');
-    const t = document.createElement('span'); t.textContent = 'Код безопасности ' + (p && p.username ? '@' + p.username : 'собеседника') + ' изменился';
+  const nick = p && p.username ? '@' + p.username : 'собеседника';
+  for (const ev of evs) {
+    const at = ev.at, nd = ev.k === 'nd';
+    const row = document.createElement('div'); row.className = 'sys-row sys-kc' + (nd ? ' sys-nd' : ''); row.dataset.at = at; row.setAttribute('role', 'note');
+    const t = document.createElement('span'); t.textContent = nd ? 'У ' + (p && p.username ? '@' + p.username : 'собеседника') + ' новое устройство' : 'Код безопасности ' + nick + ' изменился';
     const a = document.createElement('button'); a.type = 'button'; a.className = 'link'; a.textContent = 'Сверить';
     a.onclick = () => showSafety().catch(e => toastLong(ruErr(e)));
-    row.append(msIcon('shield', 'sys-ic'), t, a);
+    row.append(msIcon(nd ? 'devices' : 'shield', 'sys-ic'), t, a);
     const next = [...box.querySelectorAll('.msg')].find(m => m.dataset.at && m.dataset.at > at);
     if (next) box.insertBefore(row, next); else box.append(row);
   }
@@ -1522,9 +1549,9 @@ async function revokeSession(d) {
 }
 const fmtDT = s => s ? new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 /** Диалог подтверждения по макету: «Отмена» и красная кнопка действия */
-function askConfirm(text, okText) {
+function askConfirm(text, okText, cancelText) {
   return new Promise(res => {
-    const d = $('confirmDlg'); txt($('confirmText'), text); txt($('confirmOk'), okText);
+    const d = $('confirmDlg'); txt($('confirmText'), text); txt($('confirmOk'), okText); txt($('confirmCancel'), cancelText || 'Отмена');
     $('confirmOk').onclick = () => { d.close(); res(true); }; $('confirmCancel').onclick = () => { d.close(); res(false); };
     d.oncancel = () => res(false); d.showModal();
   });

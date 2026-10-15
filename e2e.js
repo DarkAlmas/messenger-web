@@ -84,7 +84,10 @@ const locked = fn => {
       .catch(e => { clearTimeout(t); if (e && e.name === 'AbortError') { console.error('e2e: блокировка msgr-e2e не получена за ' + LOCK_WAIT / 1000 + ' с (другая вкладка)'); rej(new LockBusy()); } else rej(e); });
     return out;
   };
-  const p = chain.then(run, run); chain = holdCap(p.catch(() => {})); return p;
+  // Очередь без своего таймера: раньше таймер 30 с запускался в момент постановки в очередь (включая ожидание предыдущих
+  // операций) — при пачке расшифровок он срабатывал ложно и пускал следующие операции параллельно. Время удержания
+  // ограничено внутри блокировки (holdCap), ожидание блокировки — LOCK_WAIT.
+  const p = chain.then(run, run); chain = p.catch(() => {}); return p;
 };
 
 function sessionId(jwt) { const p = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(decodeURIComponent(escape(atob(p)))).session_id; }
@@ -152,7 +155,7 @@ function ensureReadyFor(sid) {
       // Новая сессия = новое устройство; доверие (trust/verified) к собеседникам того же пользователя сохраняем
       const keepTrust = kv.uid === uid;
       // тот же пользователь: доверие и уже расшифрованный текст (pts:/pt:/ptg:) оставляем — история и резервная копия не теряются
-      const keep = k => keepTrust && /^(trust|pending|verified|kc|pts|pt|ptg):/.test(k);
+      const keep = k => keepTrust && /^(trust|pending|verified|kc|nd|seen|kcblock|pts|pt|ptg):/.test(k);
       for (const k of Object.keys(kv)) if (!keep(k)) await del(k);
       store = Store.newDevice(); freshDev = true;
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
@@ -230,13 +233,15 @@ async function devicesFor(user) {
     }
     // Пустой ответ (собеседник без ключей, лимит, сбой) доверие НЕ сбрасывает; устройство убираем, только если сервер вернул другие устройства
     if (Object.keys(valid).length) for (const d of Object.keys(trust)) if (!valid[d]) delete trust[d];
-    let changed = false;
+    let changed = false, added = false; const known = Object.keys(trust).length > 0 || jlist('seen:' + user).length > 0;
     for (const [d, o] of Object.entries(valid)) {
       if (trust[d] && trust[d] !== o.identity_pub) { changed = true; store.deleteSession(d); } // ключ этого устройства на сервере ≠ сохранённого
-      trust[d] = o.identity_pub; // новое устройство собеседника — не «смена ключа»
+      else if (!trust[d] && known && !jlist('seen:' + user).includes(d)) added = true; // новое устройство (не первый контакт)
+      trust[d] = o.identity_pub;
     }
-    await put('trust:' + user, JSON.stringify(trust));
+    await put('trust:' + user, JSON.stringify(trust)); await markSeen(user, Object.keys(trust));
     if (changed) await keyChanged(user);
+    if (added) await sysEvent('nd:' + user);
     for (const [d, o] of Object.entries(valid)) {
       if (trust[d] !== o.identity_pub) continue;
       await put('devuser:' + d, user);
@@ -250,12 +255,19 @@ async function devicesFor(user) {
 
 export const hasPendingChange = () => false; // смена ключа не блокирует: системная строка в чате (keyEvents)
 /** Событие «код безопасности изменился» — только локально (IndexedDB этого браузера), на сервер не уходит и с сервера не принимается. */
+async function sysEvent(k) { const ev = jlist(k); ev.push(new Date().toISOString()); await put(k, JSON.stringify(ev.slice(-50))); }
+async function markSeen(user, devs) { const s = jlist('seen:' + user); let ch = false; for (const d of devs) if (!s.includes(d)) { s.push(d); ch = true; } if (ch) await put('seen:' + user, JSON.stringify(s.slice(-50))); }
 async function keyChanged(user) {
-  const ev = jlist('kc:' + user); ev.push(new Date().toISOString()); await put('kc:' + user, JSON.stringify(ev.slice(-50)));
-  if (kv['verified:' + user]) await del('verified:' + user);
+  await sysEvent('kc:' + user);
+  // Проверенный собеседник: метку «проверено» снимаем и блокируем первую отправку до решения пользователя
+  if (kv['verified:' + user]) { await del('verified:' + user); await put('kcblock:' + user, '1'); }
   if (kv['pending:' + user]) await del('pending:' + user);
 }
-export const keyEvents = user => locked(async () => jlist('kc:' + user).filter(x => typeof x === 'string' && !isNaN(Date.parse(x)))); // с перечитыванием общего хранилища
+const okAt = x => typeof x === 'string' && !isNaN(Date.parse(x));
+/** Локальные системные события: [{k:'kc'|'nd', at}] (с перечитыванием общего хранилища). */
+export const keyEvents = user => locked(async () => [...jlist('kc:' + user).filter(okAt).map(at => ({ k: 'kc', at })), ...jlist('nd:' + user).filter(okAt).map(at => ({ k: 'nd', at }))].sort((a, b) => a.at < b.at ? -1 : 1));
+export const sendBlocked = user => locked(async () => kv['kcblock:' + user] === '1');
+export const unblockSend = user => locked(async () => { if (kv['kcblock:' + user]) await del('kcblock:' + user); });
 /** Принять новые ключи собеседника (как acceptKeys в Android). */
 export function acceptKeys(user) {
   return locked(async () => {
@@ -315,7 +327,11 @@ export function decryptDM(m) {
     if (m.sender_id) {
       await put('devuser:' + e.f, m.sender_id);
       const trust = jget('trust:' + m.sender_id), ik = store.identityOf(e.f);
-      if (ik && trust[e.f] !== ik) { const was = trust[e.f]; trust[e.f] = ik; await put('trust:' + m.sender_id, JSON.stringify(trust)); if (was) await keyChanged(m.sender_id); }
+      if (ik && trust[e.f] !== ik) {
+        const was = trust[e.f], known = Object.keys(trust).length > 0 || jlist('seen:' + m.sender_id).length > 0, seen = jlist('seen:' + m.sender_id).includes(e.f);
+        trust[e.f] = ik; await put('trust:' + m.sender_id, JSON.stringify(trust)); await markSeen(m.sender_id, [e.f]);
+        if (was) await keyChanged(m.sender_id); else if (known && !seen) await sysEvent('nd:' + m.sender_id);
+      }
     }
     return s;
   });
@@ -435,7 +451,7 @@ export function verifyScanned(peer, scanned) {
   });
 }
 /** Пользователь сам сравнил цифры и подтвердил совпадение. */
-export function markVerified(peer) { return locked(async () => { await acceptPendingInner(peer); await put('verified:' + peer, kv['trust:' + peer] || '{}'); }); }
+export function markVerified(peer) { return locked(async () => { await acceptPendingInner(peer); await put('verified:' + peer, kv['trust:' + peer] || '{}'); if (kv['kcblock:' + peer]) await del('kcblock:' + peer); }); }
 export const isVerified = peer => kv['verified:' + peer] != null && kv['verified:' + peer] === kv['trust:' + peer];
 async function acceptPendingInner(user) {
   if (!kv['pending:' + user]) return;
