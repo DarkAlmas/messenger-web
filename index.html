@@ -37,6 +37,8 @@
         <input id="username" pattern="[a-z0-9_]{3,32}" hidden>
         <p id="userHint" class="hint small" hidden>3–32 символа: латинские буквы a-z, цифры 0-9 и _</p>
         <button type="submit" id="loginBtn">Войти</button>
+        <div class="or-sep"><span>или</span></div>
+        <button type="button" id="googleBtn" class="gsi"><img src="img/google-g.svg" alt="" width="18" height="18"><span>Войти через Google</span></button>
         <button type="button" id="toggleReg" class="link">Нет аккаунта? Регистрация</button>
         <p id="authMsg" class="hint"></p>
       </form>
@@ -52,6 +54,7 @@
       <input id="findUser" placeholder="Никнейм собеседника (@nick)" autocomplete="off">
       <button id="newDirect" type="submit">Написать</button>
     </form>
+    <ul id="findResults" class="find-results" hidden></ul>
     <ul id="chatList"></ul>
   </aside>
   <main id="chatPane">
@@ -93,7 +96,7 @@
           <div class="edit-body">
           <form id="profForm" novalidate>
             <label for="pName">Имя</label><input id="pName" maxlength="64" required>
-            <label for="pNick">Никнейм</label><input id="pNick" maxlength="32" pattern="[a-z0-9_]{3,32}" autocapitalize="off" required>
+            <label for="pNick">Никнейм</label><input id="pNick" maxlength="32" pattern="[a-z0-9_]{3,32}" autocapitalize="off" required><p id="pNickHint" class="nick-hint" aria-live="polite"></p>
             <p class="hint small">3–32 символа: a-z, 0-9 и _</p>
             <label for="pBio">О себе</label><textarea id="pBio" maxlength="300" rows="3"></textarea>
             <p class="hint small counter"><span id="bioCount">0</span>/300</p>
@@ -155,6 +158,7 @@
   </nav>
 </section>
 <div id="ctxMenu" role="menu" hidden></div>
+<dialog id="nickDlg" class="nick-dlg"><h2>Выберите имя пользователя</h2><p class="hint">По нему вас смогут найти. Можно использовать a–z, 0–9 и _, от 5 до 32 символов</p><div class="nick-field"><span>@</span><input id="nickInput" maxlength="32" autocapitalize="off" autocomplete="off" spellcheck="false" aria-describedby="nickHint"></div><p id="nickHint" class="nick-hint" aria-live="polite"></p><div id="nickChips" class="nick-chips"></div><button type="button" id="nickGo" disabled>Продолжить</button><button type="button" id="nickLogout" class="link">Выйти</button></dialog>
 <div id="toast" role="status" hidden></div>
 <dialog id="fwdDlg">
   <h3>Переслать в…</h3>
@@ -191,6 +195,7 @@
 <script src="vendor/hash-wasm/argon2.umd.min.js?v=4.12.0"></script>
 <script src="backup.js?v=1"></script>
 <script src="config.js?v=20261015b"></script>
-<script src="app.js?v=20261015s"></script>
+<script src="app.js?v=20261015t"></script>
+<script src="account.js?v=1"></script>
 </body>
 </html>

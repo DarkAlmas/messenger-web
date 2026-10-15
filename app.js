@@ -1340,8 +1340,9 @@ $('profForm').onsubmit = async e => {
   e.preventDefault();
   const name = $('pName').value.trim().replace(/\s+/g, ' '), nick = normNick($('pNick').value), bio = cleanBio($('pBio').value).trim();
   if (!name || name.length > 64) return txt($('profMsg'), 'Имя: от 1 до 64 символов');
-  if (!/^[a-z0-9_]{3,32}$/.test(nick)) return txt($('profMsg'), 'Никнейм: 3–32 символа, только a-z, 0-9 и _');
-  const upd = { display_name: name, username: nick };
+  const oldNick = (profiles[me.id] || {}).username, nickChanged = nick !== oldNick;
+  if (nickChanged && !/^[a-z0-9_]{5,32}$/.test(nick)) return txt($('profMsg'), 'Никнейм: 5–32 символа, только a-z, 0-9 и _');
+  const upd = { display_name: name }; // имя пользователя меняется через set_username (account.js)
   if (profileExt) {
     upd.bio = bio || null; if (pickedColor && /^#[0-9a-fA-F]{6}$/.test(pickedColor)) upd.avatar_color = pickedColor;
     const letter = $('pLetter').value.trim();
@@ -1350,6 +1351,10 @@ $('profForm').onsubmit = async e => {
   }
   $('profSave').disabled = true; txt($('profMsg'), 'Сохраняем…');
   try {
+    if (nickChanged) {
+      const r = await window.saveProfileNick(nick);
+      if (r !== 'ok') { txt($('profMsg'), r === 'taken' ? 'Только что заняли, выберите другое' : (window.NICK_MSG[r] || window.NICK_MSG.invalid)); return; }
+    }
     const { error } = await sb.from('profiles').update(upd).eq('id', me.id);
     if (error) throw error;
     await refreshMe(); $('editCard').hidden = true; txt($('profMsg'), ''); toast('Сохранено');
