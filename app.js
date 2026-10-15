@@ -866,9 +866,8 @@ function subChat(c, retried = false) {
       if (st !== 'CHANNEL_ERROR' && st !== 'TIMED_OUT') return;
       console.warn('realtime', st, err);
       if (currentChat !== c) return;
-      if (retried) { if (chan) { sb.removeChannel(chan); chan = null; } toast('Нет связи с сервером обновлений. Откройте чат заново.'); return; }
-      sb.auth.refreshSession().then(({ data }) => rtAuth(data && data.session && data.session.access_token)).catch(() => rtAuth())
-        .then(() => { if (currentChat === c) subChat(c, true); });
+      if (retried || sessionGone) { if (chan) { sb.removeChannel(chan); chan = null; } if (!sessionGone) toast('Нет связи с сервером обновлений. Откройте чат заново.'); return; }
+      rtRecover().then(ok => { if (ok && currentChat === c && me) subChat(c, true); });
     });
 }
 async function onIncoming(m) {
@@ -1145,6 +1144,7 @@ let pickedColor = null;
 let tab = 'chats';
 function setNav(t) { tab = t; document.querySelectorAll('#bottomNav button').forEach(b => { if (b.dataset.nav === t) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }); }
 function openSettings(push = true, which = 'settings') {
+  if (!me) return; // сессия/профиль ещё не загружены
   $('app').classList.add('in-settings');
   document.querySelectorAll('#settings .group-wrap').forEach(g => { g.hidden = g.dataset.tab !== which; });
   $('editBtn').hidden = which !== 'profile'; txt($('profMsg'), ''); $('editCard').hidden = true;
@@ -1154,11 +1154,11 @@ function openSettings(push = true, which = 'settings') {
   if (which === 'profile') fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
   else { let cv = null; try { cv = localStorage.getItem('msgr-seen'); } catch { /* */ }
     if (cv) paintSeenSeg(cv); else txt($('seenVal'), '…');
-    getProfile(me.id, true).then(p => paintSeenSeg((p && p.last_seen_visibility) || 'everyone'));
+    getProfile(me.id, true).then(p => me && paintSeenSeg((p && p.last_seen_visibility) || 'everyone'));
     loadDevices(false).catch(() => {}); paintStorage(); $('notifSw').checked = notifOn(); paintNotifSub();
     txt($('buildInfo'), 'Сборка ' + (window.BUILD ? BUILD.commit + ' · ' + BUILD.date : 'неизвестна'));
-    getProfile(me.id).then(paintMini);
-    txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—'); }
+    getProfile(me.id).then(p => me && paintMini(p));
+    txt($('setEmail'), me.email || '—'); txt($('setDevice'), uaName(navigator.userAgent).name); }
 }
 function closeSettings() { $('app').classList.remove('in-settings'); setNav('chats'); maybeMarkRead(); }
 document.querySelectorAll('#bottomNav button').forEach(b => {
@@ -1421,6 +1421,23 @@ async function onSession(session) {
     loadChats();
   } else { currentChat = null; $('app').classList.remove('in-chat', 'in-settings'); qrFails = 0; startQr(); }
 }
+// Один общий перезапуск Realtime на все каналы; сессия отозвана — выходим, без переподключений по кругу
+let sessionGone = false, rtRecovering = null;
+function rtRecover() {
+  if (sessionGone) return Promise.resolve(false);
+  if (!rtRecovering) rtRecovering = sb.auth.refreshSession()
+    .then(({ data, error }) => { const t = data && data.session && data.session.access_token; if (error || !t) { sessionEnded(); return false; } return rtAuth(t).then(() => true); })
+    .catch(() => { sessionEnded(); return false; })
+    .finally(() => { setTimeout(() => { rtRecovering = null; }, 10000); });
+  return rtRecovering;
+}
+async function sessionEnded() {
+  if (sessionGone) return; sessionGone = true;
+  try { sb.removeAllChannels(); } catch (e) { /* */ } chan = null; profChan = null; inboxChan = null;
+  // ключи не трогаем (правило 30 дней: rebind_device вернёт устройство при следующем входе)
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* */ }
+  onSession(null); toast('Сеанс завершён', 3000);
+}
 async function rtAuth(token) {
   try { if (!token) { const { data } = await sb.auth.getSession(); token = data.session && data.session.access_token; } if (token) await sb.realtime.setAuth(token); }
   catch (e) { console.warn('realtime setAuth', e); }
@@ -1428,6 +1445,7 @@ async function rtAuth(token) {
 sb.auth.onAuthStateChange((e, s) => {
   if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token);
   if (e === 'SIGNED_OUT') { sb.removeAllChannels(); chan = null; profChan = null; inboxChan = null; }
+  if (e === 'SIGNED_IN') sessionGone = false;
   onSession(s);
 });
 // Вкладка вернулась из фона: если токен истёк (таймеры в фоне спят) — обновляем сессию и Realtime
@@ -1435,7 +1453,7 @@ document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible' || !me) return;
   try {
     const { data } = await sb.auth.getSession(); const s = data.session;
-    if (s && s.expires_at && s.expires_at * 1000 < Date.now() + 60000) { const r = await sb.auth.refreshSession(); await rtAuth(r.data && r.data.session && r.data.session.access_token); }
+    if (s && s.expires_at && s.expires_at * 1000 < Date.now() + 60000) { await rtRecover(); }
   } catch (e) { console.warn('refresh on visible', e); }
 });
 sb.auth.getSession().then(({ data }) => onSession(data.session));
