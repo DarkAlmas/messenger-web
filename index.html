@@ -11,7 +11,7 @@
 <link rel="preload" href="fonts/material-symbols-rounded.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="tokens.css?v=20261015b">
 <script src="theme.js?v=20261015b"></script>
-<link rel="stylesheet" href="style.css?v=20261015k">
+<link rel="stylesheet" href="style.css?v=20261015l">
 </head>
 <body>
 <div id="notice" role="alert" hidden><span id="noticeText"></span><button type="button" id="noticeClose" aria-label="Закрыть"><span class="ms" aria-hidden="true">close</span></button></div>
@@ -112,13 +112,16 @@
         <div class="settings-group">
           <div class="settings-group__title">Аккаунт</div>
           <button type="button" class="settings-row" id="rowProfile"><span class="settings-row__icon" aria-hidden="true">person</span><span class="settings-row__label">Профиль</span></button>
-          <button type="button" class="settings-row" id="rowSeen"><span class="settings-row__icon" aria-hidden="true">lock</span><span class="settings-row__label">Кто видит время в сети</span><span class="settings-row__value" id="seenVal"></span></button>
+          <button type="button" class="settings-row" id="rowSeen"><span class="settings-row__icon" aria-hidden="true">lock</span><span class="settings-row__label">Конфиденциальность</span><span class="settings-row__value" id="seenVal">…</span></button>
           <div class="row-extra" id="seenBox" hidden>
+            <p class="hint small">Кто видит, когда я был(а) в сети</p>
             <div class="seg" id="seenSeg" role="radiogroup"><button type="button" data-v="everyone">Все</button><button type="button" data-v="contacts">Мои контакты</button><button type="button" data-v="nobody">Никто</button></div>
             <p class="hint small" id="seenMsg">«Мои контакты» — те, с кем у вас есть личный чат. Если вы скрываете время, собеседники видят «был(а) недавно».</p>
+            <p class="hint small">Заблокированные</p>
+            <ul id="blockList" class="plain-list"><li class="hint small">…</li></ul>
           </div>
-          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">devices</span><span class="settings-row__label">Устройство шифрования</span><code class="settings-row__value" id="setDevice">—</code></button>
-          <button type="button" class="settings-row" id="rowE2E"><span class="settings-row__icon" aria-hidden="true">key</span><span class="settings-row__label">Шифрование</span><span class="settings-row__value">Signal, сквозное</span></button>
+          <button type="button" class="settings-row" id="rowDevices"><span class="settings-row__icon" aria-hidden="true">devices</span><span class="settings-row__label">Устройства</span><span class="settings-row__value" id="devCount"></span></button>
+          <button type="button" class="settings-row" id="rowThisDev"><span class="settings-row__icon" aria-hidden="true">key</span><span class="settings-row__label">Это устройство</span><code class="settings-row__value" id="setDevice">—</code></button>
         </div>
         <div class="settings-group">
           <div class="settings-group__title">Оформление</div>
@@ -127,12 +130,13 @@
         </div>
         <div class="settings-group">
           <div class="settings-group__title">Уведомления</div>
-          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">notifications</span><span class="settings-row__label">Уведомления</span><span class="settings-row__value">в открытой вкладке</span></button>
+          <label class="settings-row" for="notifSw"><span class="settings-row__icon" aria-hidden="true">notifications</span><span class="settings-row__label">Уведомления<small id="notifSub">в открытой вкладке</small></span><input type="checkbox" id="notifSw" class="switch" role="switch"></label>
         </div>
         <div class="settings-group">
           <div class="settings-group__title">Данные</div>
-          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">mail</span><span class="settings-row__label">Почта</span><span class="settings-row__value" id="setEmail"></span></button>
-          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">language</span><span class="settings-row__label">Язык</span><span class="settings-row__value">Русский</span></button>
+          <button type="button" class="settings-row" id="rowEmail"><span class="settings-row__icon" aria-hidden="true">mail</span><span class="settings-row__label">Почта</span><span class="settings-row__value" id="setEmail"></span></button>
+          <button type="button" class="settings-row" id="rowStorage"><span class="settings-row__icon" aria-hidden="true">storage</span><span class="settings-row__label">Хранилище</span><span class="settings-row__value" id="storeVal"></span></button>
+          <button type="button" class="settings-row" id="rowLang"><span class="settings-row__icon" aria-hidden="true">language</span><span class="settings-row__label">Язык</span><span class="settings-row__value">Русский</span></button>
         </div>
         <div class="settings-group">
           <div class="settings-group__title">Прочее</div>
@@ -157,6 +161,7 @@
   <ul id="fwdList"></ul>
   <div class="dlg-actions"><button type="button" id="fwdClose" class="link">Отмена</button></div>
 </dialog>
+<dialog id="sheetDlg" class="sheet"><h3 id="sheetTitle"></h3><div id="sheetBody"></div><div class="dlg-actions"><button type="button" id="sheetClose" class="link">Закрыть</button></div></dialog>
 <dialog id="peerDlg">
   <div class="peer-card"><span id="peerAva" class="ava xl"></span><h3 id="peerName"></h3><p id="peerNick" class="hint"></p><p id="peerBio"></p></div>
   <div class="dlg-actions"><button type="button" id="closePeer" class="link">Закрыть</button></div>
@@ -181,6 +186,6 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script src="build.js?v=8b1a71f"></script>
 <script src="config.js?v=20261015b"></script>
-<script src="app.js?v=20261015o"></script>
+<script src="app.js?v=20261015p"></script>
 </body>
 </html>

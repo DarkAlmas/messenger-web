@@ -257,7 +257,32 @@ async function chatPrefs(c, args, done) {
   toast(done); await loadChats();
 }
 let toastT = null;
-function toast(s) { const t = $('toast'); txt(t, s); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2500); }
+// ---------- уведомления во вкладке ----------
+let inboxChan = null, unseen = 0; const baseTitle = document.title;
+const notifOn = () => { try { return localStorage.getItem('msgr-notify') !== '0'; } catch { return true; } };
+function clearBadge() { if (document.visibilityState === 'visible') { unseen = 0; document.title = baseTitle; } }
+function beep() { try { const x = new AudioContext(), o = x.createOscillator(), g = x.createGain(); o.frequency.value = 880; g.gain.value = 0.05; o.connect(g); g.connect(x.destination); o.start(); o.stop(x.currentTime + 0.12); o.onended = () => x.close(); } catch { /* без звука */ } }
+/** Новые сообщения во всех моих чатах (RLS отдаёт только их): обновить список и уведомить. */
+function watchInbox() {
+  if (inboxChan) sb.removeChannel(inboxChan);
+  inboxChan = sb.channel('inbox').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, p => { const m = p.new; if (!m || !me || m.sender_id === me.id) return; if (!currentChat || m.chat_id !== currentChat.id) loadChatsSoon(); notifyMsg(m).catch(() => {}); }).subscribe();
+}
+async function notifyMsg(m) {
+  if (!notifOn()) return;
+  if (currentChat && currentChat.id === m.chat_id && document.visibilityState === 'visible' && !$('app').classList.contains('in-settings')) return;
+  const c = lastChats.find(x => x.id === m.chat_id); if (c && isMuted(c)) return;
+  if (document.visibilityState !== 'visible') { unseen++; document.title = `(${unseen}) ${baseTitle}`; }
+  beep();
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  let text = 'Новое сообщение';
+  if (m.ciphertext) { const pl = await decryptPayload(m); if (pl && !pl.fail && !pl.other) text = pl.t || (pl.f ? 'Файл' : text); }
+  let title = c ? (c.title || c.name || 'Мессенджер') : 'Мессенджер';
+  if (c && c.peer) { const p = await getProfile(c.peer); if (p) title = displayName(p); }
+  const n = new Notification(title, { body: text.slice(0, 200), tag: 'chat-' + m.chat_id, renotify: true });
+  n.onclick = () => { window.focus(); const li = document.querySelector(`#chatList li[data-id="${m.chat_id}"]`); if (li) li.click(); n.close(); };
+}
+document.addEventListener('visibilitychange', clearBadge);
+function toast(s, ms = 2500) { const t = $('toast'); txt(t, s); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms); }
 
 // ---------- контекстное меню (правый клик / долгое нажатие) ----------
 function openMenu(e, items) {
@@ -350,6 +375,7 @@ function profileChanged(p) {
 let profChan = null;
 function watchProfiles() {
   if (profChan) sb.removeChannel(profChan);
+  watchInbox();
   profChan = sb.channel('profiles').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, x => profileChanged(x.new)).subscribe();
 }
 
@@ -726,7 +752,7 @@ function onTyping(p) {
 }
 
 // ---------- кто видит «был(а) в сети» ----------
-function paintSeenSeg(v) { txt($('seenVal'), { everyone: 'Все', contacts: 'Мои контакты', nobody: 'Никто' }[v] || ''); document.querySelectorAll('#seenSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
+function paintSeenSeg(v) { try { localStorage.setItem('msgr-seen', v); } catch { /* */ } txt($('seenVal'), { everyone: 'Все', contacts: 'Мои контакты', nobody: 'Никто' }[v] || ''); document.querySelectorAll('#seenSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
 document.querySelectorAll('#seenSeg button').forEach(b => {
   b.onclick = async () => {
     const { error } = await sb.from('profiles').update({ last_seen_visibility: b.dataset.v }).eq('id', me.id);
@@ -775,20 +801,7 @@ async function openChat(c, li) {
   // Приватный канал: broadcast «печатает» доступен только участникам чата (политики realtime.messages на сервере)
   await rtAuth();
   if (currentChat !== c) return;
-  chan = sb.channel('chat-' + c.id, { config: { private: true } })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => onIncoming(p.new))
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => updMsg(p.new))
-    // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { readState[p.new.user_id] = p.new.last_read_at; paintAllTicks(); } })
-    // DELETE в Realtime не фильтруется по колонкам — приходит только id, сверяем с загруженными
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, p => { if (p.old && p.old.id && msgEls[p.old.id]) { removeMsgEl(p.old.id); loadChatsSoon(); } })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_pins' }, p => { if (!p.old || !p.old.chat_id || p.old.chat_id === c.id) loadPins(); })
-    // reactions без chat_id: INSERT сверяем с загруженными сообщениями, DELETE приходит только с id — перечитываем
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, p => { const r = p.new; if (r && msgEls[r.message_id]) addReact(r); })
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, () => reloadReactsSoon())
-    .on('broadcast', { event: 'typing' }, p => onTyping(p.payload))
-    .subscribe((st, err) => { if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') console.warn('realtime', st, err); });
+  subChat(c);
   if (!c.role) { const { data: r } = await sb.from('chat_members').select('role').eq('chat_id', c.id).eq('user_id', me.id).maybeSingle(); if (r) c.role = r.role; }
   loadPins(); loadLastSeen(); paintSub();
   $('messages').prepend(olderBtn); olderBtn.hidden = true; oldestAt = null;
@@ -826,6 +839,31 @@ olderBtn.onclick = async () => {
   } catch (e) { alert('Не удалось загрузить более ранние сообщения: ' + ruErr(e)); }
   finally { btn.disabled = false; txt(btn, 'Загрузить более ранние сообщения'); }
 };
+/** Подписка на приватный канал чата. При ошибке (часто — протухший токен) один раз обновляем сессию, setAuth и подписываемся заново, без бесконечных повторов со старым токеном. */
+function subChat(c, retried = false) {
+  if (chan) sb.removeChannel(chan);
+  chan = sb.channel('chat-' + c.id, { config: { private: true } })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => onIncoming(p.new))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => updMsg(p.new))
+    // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { readState[p.new.user_id] = p.new.last_read_at; paintAllTicks(); } })
+    // DELETE в Realtime не фильтруется по колонкам — приходит только id, сверяем с загруженными
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, p => { if (p.old && p.old.id && msgEls[p.old.id]) { removeMsgEl(p.old.id); loadChatsSoon(); } })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'chat_pins' }, p => { if (!p.old || !p.old.chat_id || p.old.chat_id === c.id) loadPins(); })
+    // reactions без chat_id: INSERT сверяем с загруженными сообщениями, DELETE приходит только с id — перечитываем
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, p => { const r = p.new; if (r && msgEls[r.message_id]) addReact(r); })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, () => reloadReactsSoon())
+    .on('broadcast', { event: 'typing' }, p => onTyping(p.payload))
+    .subscribe((st, err) => {
+      if (st !== 'CHANNEL_ERROR' && st !== 'TIMED_OUT') return;
+      console.warn('realtime', st, err);
+      if (currentChat !== c) return;
+      if (retried) { if (chan) { sb.removeChannel(chan); chan = null; } toast('Нет связи с сервером обновлений. Откройте чат заново.'); return; }
+      sb.auth.refreshSession().then(({ data }) => rtAuth(data && data.session && data.session.access_token)).catch(() => rtAuth())
+        .then(() => { if (currentChat === c) subChat(c, true); });
+    });
+}
 async function onIncoming(m) {
   const e = $('messages').querySelector('.empty-state'); if (e) e.remove();
   await addMsg(m);
@@ -1102,12 +1140,15 @@ function setNav(t) { tab = t; document.querySelectorAll('#bottomNav button').for
 function openSettings(push = true, which = 'settings') {
   $('app').classList.add('in-settings');
   document.querySelectorAll('#settings .group-wrap').forEach(g => { g.hidden = g.dataset.tab !== which; });
-  $('editBtn').hidden = which !== 'profile'; $('editCard').hidden = true;
+  $('editBtn').hidden = which !== 'profile'; txt($('profMsg'), ''); $('editCard').hidden = true;
   txt($('pageTitle'), which === 'profile' ? 'Профиль' : 'Настройки');
   setNav(which);
   if (push && location.hash !== '#' + which) history.pushState({ v: which }, '', '#' + which);
   if (which === 'profile') fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
-  else { getProfile(me.id, true).then(p => paintSeenSeg((p && p.last_seen_visibility) || 'everyone'));
+  else { let cv = null; try { cv = localStorage.getItem('msgr-seen'); } catch { /* */ }
+    if (cv) paintSeenSeg(cv); else txt($('seenVal'), '…');
+    getProfile(me.id, true).then(p => paintSeenSeg((p && p.last_seen_visibility) || 'everyone'));
+    loadDevices(false).catch(() => {}); paintStorage(); $('notifSw').checked = notifOn(); paintNotifSub();
     txt($('buildInfo'), 'Сборка ' + (window.BUILD ? BUILD.commit + ' · ' + BUILD.date : 'неизвестна'));
     getProfile(me.id).then(paintMini);
     txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—'); }
@@ -1152,9 +1193,74 @@ function paintProfHead(p) { txt($('profName'), displayName(p)); txt($('profNick'
 function paintMini(p) { if (!p) return; fillAvatar($('miniAva'), p); txt($('miniName'), displayName(p)); txt($('miniNick'), '@' + (p.username || '')); }
 $('editBtn').onclick = () => { $('editCard').hidden = !$('editCard').hidden; if (!$('editCard').hidden) $('pName').focus(); };
 $('miniHead').onclick = $('rowProfile').onclick = () => openSettings(true, 'profile');
-$('rowSeen').onclick = () => { $('seenBox').hidden = !$('seenBox').hidden; };
+$('rowSeen').onclick = () => { $('seenBox').hidden = !$('seenBox').hidden; if (!$('seenBox').hidden) loadBlocks(); };
+// ---------- листы настроек ----------
+function sheet(title, nodes) { txt($('sheetTitle'), title); const b = $('sheetBody'); b.textContent = ''; b.append(...nodes); $('sheetDlg').showModal(); }
+$('sheetClose').onclick = () => $('sheetDlg').close();
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) txt(e, text); return e; }
+function kvRow(k, v, mono) { const r = el('div', 'kv'); r.append(el('span', 'hint small', k), el(mono ? 'code' : 'span', '', v)); return r; }
+async function fpOf(pub) { if (!pub) return '—'; const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pub))); return [...d.slice(0, 16)].map(x => x.toString(16).padStart(2, '0')).join('').match(/.{4}/g).join(' '); }
+let myDevs = null;
+async function loadDevices(force) {
+  if (myDevs && !force) { txt($('devCount'), String(myDevs.length)); return myDevs; }
+  const { data, error } = await sb.from('devices_keys').select('device_id, identity_pub, updated_at').eq('user_id', me.id).order('updated_at', { ascending: false });
+  if (error) { txt($('devCount'), '—'); throw error; }
+  myDevs = data || []; txt($('devCount'), String(myDevs.length)); return myDevs;
+}
+const fmtDT = s => s ? new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+$('rowDevices').onclick = async () => {
+  try {
+    const devs = await loadDevices(true), cur = E2E && E2E.deviceId();
+    const nodes = [el('p', 'hint small', 'Устройства, на которых для вас созданы ключи шифрования. Удалить устройство можно, выйдя на нём.')];
+    if (!devs.length) nodes.push(el('p', 'hint', 'Нет устройств с ключами'));
+    for (const d of devs) { const box = el('div', 'dev-item'); box.append(el('b', '', (d.device_id === cur ? 'Это устройство · ' : '') + d.device_id.slice(0, 8)), kvRow('Ключи обновлены', fmtDT(d.updated_at)), kvRow('Отпечаток ключа', await fpOf(d.identity_pub), true)); nodes.push(box); }
+    sheet('Устройства', nodes);
+  } catch (e) { toast('Не удалось загрузить устройства: ' + ruErr(e)); }
+};
+$('rowThisDev').onclick = async () => {
+  const id = E2E && E2E.deviceId();
+  let fp = '—';
+  if (id) { try { const devs = await loadDevices(true); const d = devs.find(x => x.device_id === id); fp = d ? await fpOf(d.identity_pub) : 'ключи не найдены на сервере'; } catch (e) { fp = 'не удалось загрузить'; } }
+  sheet('Это устройство', [kvRow('ID устройства', id || 'ключи шифрования ещё не созданы', true), kvRow('Отпечаток ключа', fp, true), kvRow('Шифрование', 'Signal (сквозное): сообщения и файлы шифруются на устройстве'), el('p', 'hint small', 'Профиль (имя, ник, «о себе», аватар) виден всем и не шифруется.')]);
+};
+$('rowEmail').onclick = () => sheet('Почта', [kvRow('Почта аккаунта', me.email || '—'), el('p', 'hint small', 'Почта используется для входа. Её видите только вы.')]);
+$('rowLang').onclick = () => { const r = el('label', 'radio-row'); const i = el('input'); i.type = 'radio'; i.checked = true; i.name = 'lang'; r.append(i, el('span', '', 'Русский')); sheet('Язык', [r, el('p', 'hint small', 'Другие языки пока недоступны.')]); };
+function paintNotifSub() {
+  let s = 'выключены';
+  if ($('notifSw').checked) s = !('Notification' in window) ? 'звук и счётчик во вкладке' : Notification.permission === 'granted' ? 'всплывающие и звук' : Notification.permission === 'denied' ? 'звук и счётчик (всплывающие запрещены в браузере)' : 'звук и счётчик во вкладке';
+  txt($('notifSub'), s);
+}
+$('notifSw').onchange = async () => {
+  const on = $('notifSw').checked; try { localStorage.setItem('msgr-notify', on ? '1' : '0'); } catch { /* */ }
+  if (on && 'Notification' in window && Notification.permission === 'default') { try { await Notification.requestPermission(); } catch { /* */ } }
+  paintNotifSub(); toast(on ? 'Уведомления включены' : 'Уведомления выключены');
+};
+async function loadBlocks() {
+  const ul = $('blockList'); ul.textContent = ''; ul.append(el('li', 'hint small', '…'));
+  const { data, error } = await sb.from('blocks').select('blocked, created_at').eq('blocker', me.id).order('created_at', { ascending: false });
+  ul.textContent = '';
+  if (error) { ul.append(el('li', 'hint small', 'Не удалось загрузить: ' + ruErr(error))); return; }
+  if (!data || !data.length) { ul.append(el('li', 'hint small', 'Никого')); return; }
+  for (const b of data) { const li = el('li', '', '…'); ul.append(li); getProfile(b.blocked).then(p => txt(li, p ? displayName(p) + ' · @' + p.username : 'удалённый пользователь')); }
+}
+async function cacheBytes() { let n = 0; if ('caches' in window) for (const k of await caches.keys()) { const c = await caches.open(k); for (const r of await c.keys()) { const x = await c.match(r); if (x) n += (await x.clone().blob()).size; } } return n; }
+async function paintStorage() { try { const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null; txt($('storeVal'), est ? fmtSize(est.usage || 0) : '—'); } catch { txt($('storeVal'), '—'); } }
+$('rowStorage').onclick = async () => {
+  const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate().catch(() => null) : null;
+  const cb = await cacheBytes().catch(() => 0), nAva = Object.keys(avaUrls).length, nProf = Object.keys(profiles).length;
+  const btn = el('button', 'ghost', 'Очистить кэш'); btn.type = 'button';
+  const info = el('p', 'hint small', 'Ключи шифрования и расшифрованная история хранятся отдельно и при очистке не удаляются.');
+  btn.onclick = async () => {
+    if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
+    for (const k of Object.keys(avaUrls)) delete avaUrls[k];
+    for (const k of Object.keys(profiles)) if (k !== me.id) delete profiles[k];
+    try { sessionStorage.clear(); } catch { /* */ }
+    $('sheetDlg').close(); toast('Кэш очищен'); paintStorage();
+  };
+  sheet('Хранилище', [kvRow('Всего занято сайтом', est ? fmtSize(est.usage || 0) : '—'), kvRow('Кэш файлов', fmtSize(cb)), kvRow('Ссылки на аватарки / профили в памяти', nAva + ' / ' + nProf), info, btn]);
+};
 $('rowTheme').onclick = () => { $('themeBox').hidden = !$('themeBox').hidden; };
-$('rowE2E').onclick = $('rowHelp').onclick = () => toast('Сообщения и файлы шифруются на устройстве (Signal). Сервер их не видит. Профиль виден всем и не шифруется.');
+$('rowHelp').onclick = () => toast('Сообщения и файлы шифруются на устройстве (Signal). Сервер их не видит. Профиль виден всем и не шифруется.');
 $('pNick').oninput = () => { $('pNick').value = $('pNick').value.toLowerCase(); };
 $('profForm').onsubmit = async e => {
   e.preventDefault();
@@ -1185,7 +1291,7 @@ $('avaFile').onchange = async () => {
   const f = $('avaFile').files[0]; $('avaFile').value = ''; if (!f) return;
   if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) return toast('Нужна картинка JPEG, PNG, WebP или GIF');
   if (f.size > 2 * 1024 * 1024) return toast('Файл больше 2 МБ');
-  $('avaPhotoBtn').disabled = true; txt($('profMsg'), 'Загружаем фото…');
+  $('avaPhotoBtn').disabled = true; toast('Загружаем фото…', 10000);
   try {
     const blob = await squareImage(f, 256);
     const old = (await getProfile(me.id, true)).avatar_url;
@@ -1195,7 +1301,7 @@ $('avaFile').onchange = async () => {
     const { error: e2 } = await sb.from('profiles').update({ avatar_url: path }).eq('id', me.id);
     if (e2) { await sb.storage.from('avatars').remove([path]).catch(() => {}); throw e2; }
     if (old && old !== path) await sb.storage.from('avatars').remove([old]).catch(() => {});
-    await refreshMe(); txt($('profMsg'), '✅ Фото обновлено');
+    await refreshMe(); txt($('profMsg'), ''); toast('Фото обновлено', 3000);
   } catch (err) { txt($('profMsg'), 'Фото не загружено: ' + ruErr(err)); }
   finally { $('avaPhotoBtn').disabled = !profileExt; }
 };
@@ -1205,7 +1311,7 @@ $('avaRemoveBtn').onclick = async () => {
     const old = (await getProfile(me.id, true)).avatar_url;
     const { error } = await sb.from('profiles').update({ avatar_url: null }).eq('id', me.id); if (error) throw error;
     if (old) await sb.storage.from('avatars').remove([old]).catch(() => {});
-    await refreshMe(); txt($('profMsg'), '✅ Фото убрано');
+    await refreshMe(); txt($('profMsg'), ''); toast('Фото убрано', 3000);
   } catch (err) { txt($('profMsg'), ruErr(err)); }
 };
 /** Квадрат по центру, size×size, WebP (или JPEG, если браузер не умеет WebP). Метаданные (EXIF, геометка) отбрасываются. */
@@ -1239,5 +1345,17 @@ async function rtAuth(token) {
   try { if (!token) { const { data } = await sb.auth.getSession(); token = data.session && data.session.access_token; } if (token) await sb.realtime.setAuth(token); }
   catch (e) { console.warn('realtime setAuth', e); }
 }
-sb.auth.onAuthStateChange((e, s) => { if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token); onSession(s); });
+sb.auth.onAuthStateChange((e, s) => {
+  if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token);
+  if (e === 'SIGNED_OUT') { sb.removeAllChannels(); chan = null; profChan = null; inboxChan = null; }
+  onSession(s);
+});
+// Вкладка вернулась из фона: если токен истёк (таймеры в фоне спят) — обновляем сессию и Realtime
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || !me) return;
+  try {
+    const { data } = await sb.auth.getSession(); const s = data.session;
+    if (s && s.expires_at && s.expires_at * 1000 < Date.now() + 60000) { const r = await sb.auth.refreshSession(); await rtAuth(r.data && r.data.session && r.data.session.access_token); }
+  } catch (e) { console.warn('refresh on visible', e); }
+});
 sb.auth.getSession().then(({ data }) => onSession(data.session));

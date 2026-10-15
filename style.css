@@ -271,3 +271,18 @@ button.settings-row:hover{background:var(--color-hover)}button.settings-row[tabi
 .build-label{text-align:center;font-size:12px;color:var(--color-text-secondary);padding:16px}
 .pad{max-width:620px;margin:0 auto 8px;padding:0 16px}
 #settings .bar #editBtn{margin-left:auto}
+/* QA 15.10: фон значка прозрачный, подсветка — вся строка, скругления карточки на крайних строках */
+.settings-row + .settings-row,.row-extra + .settings-row{box-shadow:none;position:relative}
+.settings-row + .settings-row::before,.row-extra + .settings-row::before{content:'';position:absolute;left:56px;right:0;top:0;height:1px;background:var(--color-divider)}
+.settings-row__icon,.settings-row:hover .settings-row__icon,.settings-row:active .settings-row__icon,.settings-row:focus .settings-row__icon{background:transparent!important}
+button.settings-row,label.settings-row{filter:none;-webkit-tap-highlight-color:transparent;outline:none}
+button.settings-row:hover,button.settings-row:active,label.settings-row:hover,label.settings-row:active,button.settings-row:focus-visible,label.settings-row:focus-within{background:var(--color-hover)}
+.settings-group > .settings-row:last-child{border-radius:0 0 16px 16px}
+.settings-row__label small{font-size:13px}
+.switch{appearance:none;-webkit-appearance:none;width:52px;height:32px;border-radius:16px;background:var(--color-surface-container);border:2px solid var(--color-text-secondary);position:relative;cursor:pointer;flex:none;margin:0;transition:background var(--dur)}
+.switch::after{content:'';position:absolute;top:6px;left:6px;width:16px;height:16px;border-radius:50%;background:var(--color-text-secondary);transition:all var(--dur)}
+.switch:checked{background:var(--color-primary);border-color:var(--color-primary)}.switch:checked::after{left:24px;top:2px;width:24px;height:24px;background:#fff}
+.sheet .kv{display:flex;flex-direction:column;gap:2px;margin:10px 0}.sheet .kv code{word-break:break-all}
+.dev-item{border-top:1px solid var(--color-divider);padding:8px 0}
+.radio-row{display:flex;align-items:center;gap:12px;min-height:48px}
+.plain-list{list-style:none;padding:0;margin:4px 0}.plain-list li{padding:4px 0}
