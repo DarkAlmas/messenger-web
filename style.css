@@ -328,3 +328,4 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .unset{color:var(--color-text-secondary)}
 .find-line{margin:-4px 12px 8px;font-size:13px;color:var(--color-text-secondary)}
 .find-line.spin::before{content:"";display:inline-block;width:10px;height:10px;margin-right:6px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gspin .8s linear infinite;vertical-align:-1px}
+.ava.unknown{background:var(--color-surface-container);color:var(--color-text-secondary);font-family:"Material Symbols Rounded";font-weight:400;font-size:24px;font-feature-settings:"liga";-webkit-font-feature-settings:"liga";letter-spacing:normal;text-transform:none}.ava.unknown.sm{font-size:20px}.ava.unknown.xl{font-size:56px}

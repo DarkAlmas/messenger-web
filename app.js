@@ -239,7 +239,7 @@ async function loadChats() {
     li.oncontextmenu = e => { e.preventDefault(); openMenu(e, chatMenuItems(c)); };
     longPress(li, e => openMenu(e, chatMenuItems(c)));
     ul.appendChild(li);
-    if (c.peer) getProfile(c.peer).then(p => { if (p) { txt(nm, displayName(p)); c.name = displayName(p); ava.replaceWith(avatarEl(p)); } });
+    if (c.peer) getProfile(c.peer).then(p => { if (p) { txt(nm, displayName(p)); c.name = displayName(p); ava.replaceWith(avatarEl(p)); } else if (!c.name) txt(nm, UNKNOWN_NAME); });
   }
   if (!visible.length) { const li = document.createElement('li'); li.className = 'hint'; txt(li, showArchive ? 'В архиве пусто.' : 'Чатов пока нет. Найдите собеседника по никнейму.'); ul.append(li); }
   if (currentChat) { const cur = lastChats.find(x => x.id === currentChat.id); if (cur) Object.assign(currentChat, { pinned: cur.pinned, muted_until: cur.muted_until, archived: cur.archived, role: cur.role }); }
@@ -338,8 +338,10 @@ async function getProfile(id, fresh) {
 }
 /** Профиль из find_user — в кэш, чтобы шапка/имя работали до появления общего чата */
 function seedProfile(p) { if (p && p.id) profiles[p.id] = { ...(profiles[p.id] || {}), ...p }; }
-function displayName(p) { return p ? (p.display_name || '@' + p.username) : 'неизвестный'; }
-async function nameOf(id) { const p = await getProfile(id); return p ? displayName(p) : 'неизвестный'; }
+// Профиль не загрузился (удалён/скрыт RLS): «Пользователь», серый аватар с иконкой person, без статуса
+const UNKNOWN_NAME = 'Пользователь';
+function displayName(p) { return p ? (p.display_name || '@' + p.username) : UNKNOWN_NAME; }
+async function nameOf(id) { const p = await getProfile(id); return p ? displayName(p) : UNKNOWN_NAME; }
 const COLORS = ['#5c6bc0', '#26a69a', '#ef6c00', '#ab47bc', '#42a5f5', '#ec407a', '#7cb342', '#8d6e63']; // как Ui.AVATAR в Android (docs/design)
 function colorFor(p) {
   if (p && /^#[0-9a-fA-F]{6}$/.test(p.avatar_color || '')) return p.avatar_color;
@@ -357,7 +359,8 @@ function avatarLetter(p) {
   return (Array.from(n)[0] || '?').toUpperCase();
 }
 function fillAvatar(s, p) {
-  s.textContent = ''; s.hidden = false;
+  s.textContent = ''; s.hidden = false; s.classList.toggle('unknown', !p);
+  if (!p) { s.style.background = ''; s.dataset.path = ''; txt(s, 'person'); return; }
   s.style.background = colorFor(p);
   txt(s, avatarLetter(p));
   const path = p && p.avatar_url;
@@ -393,7 +396,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015za').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zb').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -700,7 +703,7 @@ async function doForward(target) {
   try {
     toast('Пересылаем…');
     // Имя автора оригинала — только внутри зашифрованного payload; шифротекст и файловые ключи не переиспользуются
-    const fw = x.pl.fw || (x.m.sender_id === me.id ? displayName(profiles[me.id]) : (profiles[x.m.sender_id] ? displayName(profiles[x.m.sender_id]) : 'неизвестный'));
+    const fw = x.pl.fw || (x.m.sender_id === me.id ? displayName(profiles[me.id]) : displayName(profiles[x.m.sender_id]));
     if (x.pl.f) {
       const plain = await fetchFilePlain(x.pl.f); // расшифровали — и ниже заново шифруем новым ключом AES и для нового чата
       await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.t || '', fw);
@@ -731,6 +734,7 @@ function seenText(t, now = new Date()) {
   if (d.getFullYear() === now.getFullYear()) return 'был(а) ' + d.getDate() + ' ' + MON_SHORT[d.getMonth()] + ' в ' + hm;
   return 'был(а) ' + p2(d.getDate()) + '.' + p2(d.getMonth() + 1) + '.' + d.getFullYear();
 }
+let peerUnknown = false; // профиль собеседника не загрузился — без «был(а)»
 async function loadLastSeen() {
   const c = currentChat; if (!c || c.kind !== 'direct' || !peerId) return paintSub();
   const { data, error } = await sb.rpc('get_last_seen', { p_user: peerId });
@@ -743,7 +747,7 @@ function paintSub() {
   if (Date.now() < typingUntil) { s.className = 'typing'; txt(s, (currentChat.kind === 'direct' ? '' : (typingWho ? typingWho + ' ' : '')) + 'печатает'); const d = document.createElement('span'); d.className = 'typing-dots'; d.setAttribute('aria-hidden', 'true'); d.append(document.createElement('i'), document.createElement('i'), document.createElement('i')); s.append(d); s.setAttribute('aria-label', s.textContent + '…'); return; }
   s.removeAttribute('aria-label');
   if (currentChat.kind !== 'direct') return txt(s, 'группа');
-  if (lastSeen === undefined) return txt(s, '');
+  if (lastSeen === undefined || peerUnknown) return txt(s, '');
   const t = seenText(lastSeen); if (t === 'в сети') s.className = 'online'; txt(s, t);
 }
 setInterval(() => { if (currentChat && document.visibilityState === 'visible') loadLastSeen(); }, 60000);
@@ -793,14 +797,18 @@ async function openChat(c, li) {
   const badge = li.querySelector('.badge'); if (badge) badge.remove();
   $('app').classList.add('in-chat'); $('app').classList.remove('in-settings');
   if (location.hash !== '#chat') history.pushState({ v: 'chat' }, '', '#chat');
-  chatHasE2e = false; peerId = c.peer || null;
+  chatHasE2e = false; peerId = c.peer || null; peerUnknown = false;
   for (const k of Object.keys(msgEls)) delete msgEls[k];
   txt($('chatTitle'), li.querySelector('.name') ? li.querySelector('.name').textContent : li.textContent);
   $('chatAva').hidden = true;
   $('sendForm').hidden = false; $('messages').innerHTML = ''; $('messages').append(olderBtn); $('safetyBtn').hidden = true;
   if (c.kind === 'direct') {
     if (!peerId) { const { data: pm } = await sb.from('chat_members').select('user_id').eq('chat_id', c.id).neq('user_id', me.id).limit(1).maybeSingle(); peerId = pm ? pm.user_id : null; }
-    if (peerId) getProfile(peerId).then(p => { if (currentChat === c && p) { txt($('chatTitle'), displayName(p)); fillAvatar($('chatAva'), p); } });
+    if (peerId) getProfile(peerId).then(p => {
+      if (currentChat !== c) return;
+      peerUnknown = !p; if (!p && !c.name) txt($('chatTitle'), UNKNOWN_NAME);
+      if (p) txt($('chatTitle'), displayName(p)); fillAvatar($('chatAva'), p); paintSub();
+    });
     if (peerId && await e2eStart()) E2E.peerHasKeys(peerId).then(h => { if (currentChat === c) { $('safetyBtn').hidden = !h; safetyLabel(); } }).catch(() => {});
   } else {
     fillAvatar($('chatAva'), { display_name: c.title || '?', id: c.id });
@@ -1156,8 +1164,9 @@ $('backBtn').onclick = () => history.length > 1 && location.hash === '#chat' ? h
 function closeChatView() { $('app').classList.remove('in-chat'); }
 $('peerBtn').onclick = async () => {
   if (!currentChat || currentChat.kind !== 'direct' || !peerId) return;
-  const p = await getProfile(peerId, true); if (!p) return;
-  fillAvatar($('peerAva'), p); txt($('peerName'), displayName(p)); txt($('peerNick'), '@' + p.username); txt($('peerBio'), p.bio || 'Не указано'); $('peerBio').classList.toggle('unset', !p.bio);
+  const p = await getProfile(peerId, true);
+  fillAvatar($('peerAva'), p); txt($('peerName'), displayName(p)); txt($('peerNick'), p ? '@' + p.username : ''); $('peerNick').hidden = !p;
+  txt($('peerBio'), p ? p.bio || 'Не указано' : ''); $('peerBio').hidden = !p; $('peerBio').classList.toggle('unset', !!p && !p.bio);
   $('peerDlg').showModal();
 };
 $('closePeer').onclick = () => $('peerDlg').close();
