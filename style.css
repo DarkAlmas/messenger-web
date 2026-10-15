@@ -238,7 +238,7 @@ button{border-radius:var(--radius-button)}
 .msg.mine .react.mine{border-color:rgba(255,255,255,.5)}
 #buildInfo{text-align:center;margin-top:12px;user-select:all}
 /* Material Symbols Rounded (Google, Apache 2.0), самохостинг: подмножество нужных значков */
-@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2) format('woff2')}
+@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2?v=2) format('woff2')}
 .ms,.settings-row__icon{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:'liga';-webkit-font-smoothing:antialiased;user-select:none;overflow:hidden;flex:none}
 .ms.s{font-size:16px;vertical-align:-3px}
 .ava.ms{font-family:'Material Symbols Rounded';font-weight:normal;font-size:24px}
@@ -286,3 +286,12 @@ button.settings-row:hover,button.settings-row:active,label.settings-row:hover,la
 .dev-item{border-top:1px solid var(--color-divider);padding:8px 0}
 .radio-row{display:flex;align-items:center;gap:12px;min-height:48px}
 .plain-list{list-style:none;padding:0;margin:4px 0}.plain-list li{padding:4px 0}
+.dev-row{min-height:64px;transition:transform .25s var(--ease),opacity .25s}.dev-row.gone{transform:translateX(-100%);opacity:0}
+.dev-row .settings-row__label small,.dev-cur .settings-row__label small{color:var(--color-text-secondary)}
+.dev-cur{min-height:64px;cursor:default}.dev-cur .online{color:var(--color-primary)}
+#sheetBody .settings-group{margin:0 0 12px}
+button.danger-link{color:var(--color-danger);font-size:14px;white-space:nowrap}
+dialog.bottom{margin:auto auto 0;border-radius:16px 16px 0 0;max-width:520px;width:100vw}
+.dev-big{font-size:40px;color:var(--color-text-secondary)}#devBody h3{font-size:16px;margin:8px 0}
+#devBody .settings-row{padding:0;border-radius:12px}
+dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-content:flex-end;gap:16px}

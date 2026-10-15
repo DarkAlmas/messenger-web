@@ -103,8 +103,10 @@ setInterval(async () => {
 }, 5000);
 $('logout').onclick = async () => {
   if (!confirm('Выйти на этом устройстве?\n\nКлючи шифрования этого браузера будут удалены. Вся зашифрованная переписка, которую вы видите здесь (включая ваши отправленные сообщения), после выхода станет нечитаемой на этом устройстве — восстановить её нельзя. Сообщения останутся читаемыми на других ваших устройствах.')) return;
+  await doLogout(); };
+async function doLogout() {
   try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
-  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } };
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } }
 
 // ---------- вход по QR ----------
 const QR_TEXT = 'Откройте приложение на телефоне: меню ⋮ → «Войти на сайте (QR)» и отсканируйте код. Входите только если сами только что открыли этот QR.';
@@ -1201,26 +1203,93 @@ function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.
 function kvRow(k, v, mono) { const r = el('div', 'kv'); r.append(el('span', 'hint small', k), el(mono ? 'code' : 'span', '', v)); return r; }
 async function fpOf(pub) { if (!pub) return '—'; const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pub))); return [...d.slice(0, 16)].map(x => x.toString(16).padStart(2, '0')).join('').match(/.{4}/g).join(' '); }
 let myDevs = null;
+/** Сеансы входа (RPC Hack Bot list_devices): id, user_agent, ip (маскирован), created_at, refreshed_at, is_current */
 async function loadDevices(force) {
   if (myDevs && !force) { txt($('devCount'), String(myDevs.length)); return myDevs; }
-  const { data, error } = await sb.from('devices_keys').select('device_id, identity_pub, updated_at').eq('user_id', me.id).order('updated_at', { ascending: false });
+  const { data, error } = await sb.rpc('list_devices');
   if (error) { txt($('devCount'), '—'); throw error; }
-  myDevs = data || []; txt($('devCount'), String(myDevs.length)); return myDevs;
+  myDevs = (data || []).sort((x, y) => (y.is_current ? 1 : 0) - (x.is_current ? 1 : 0) || new Date(y.refreshed_at || y.created_at) - new Date(x.refreshed_at || x.created_at));
+  txt($('devCount'), String(myDevs.length)); return myDevs;
+}
+function uaName(ua) {
+  ua = ua || ''; if (!ua) return { name: 'Неизвестное устройство', icon: 'devices' };
+  const b = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /YaBrowser/.test(ua) ? 'Яндекс Браузер' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : /okhttp|Dalvik/i.test(ua) ? 'Приложение' : /supabase|java|kotlin/i.test(ua) ? 'Приложение' : null;
+  const o = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : null;
+  const mobile = /Android|iPhone|iPad|Mobile|okhttp|Dalvik/i.test(ua);
+  return { name: [b, o].filter(Boolean).join(', ') || ua.slice(0, 40), icon: mobile ? 'smartphone' : 'computer' };
+}
+async function revokeSession(d) {
+  const { error } = await sb.rpc('revoke_device', { p_session_id: d.id });
+  if (error) throw error;
+  myDevs = (myDevs || []).filter(x => x.id !== d.id); txt($('devCount'), String(myDevs.length));
 }
 const fmtDT = s => s ? new Date(s).toLocaleString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+/** Диалог подтверждения по макету: «Отмена» и красная кнопка действия */
+function askConfirm(text, okText) {
+  return new Promise(res => {
+    const d = $('confirmDlg'); txt($('confirmText'), text); txt($('confirmOk'), okText);
+    $('confirmOk').onclick = () => { d.close(); res(true); }; $('confirmCancel').onclick = () => { d.close(); res(false); };
+    d.oncancel = () => res(false); d.showModal();
+  });
+}
+const devSub = d => [d.ip || null, d.is_current ? 'в сети' : seenText(d.refreshed_at || d.created_at)].filter(Boolean).join(' · ');
+function devRow(d, onGone) {
+  const u = uaName(d.user_agent), row = el('button', 'settings-row dev-row'); row.type = 'button';
+  const ic = el('span', 'settings-row__icon', u.icon); ic.setAttribute('aria-hidden', 'true');
+  const meta = el('span', 'settings-row__label'); meta.append(el('span', '', u.name), el('small', '', devSub(d)));
+  row.append(ic, meta);
+  row.onclick = () => openSession(d, () => { row.classList.add('gone'); setTimeout(() => { row.remove(); onGone && onGone(); }, 250); });
+  return row;
+}
+function openSession(d, removed) {
+  const u = uaName(d.user_agent), dlg = $('devDlg'), b = $('devBody'); b.textContent = '';
+  const ic = el('span', 'ms dev-big', u.icon); ic.setAttribute('aria-hidden', 'true');
+  b.append(ic, el('h3', '', u.name), kvRow('IP', d.ip || '—'), kvRow('Последняя активность', d.is_current ? 'в сети' : seenText(d.refreshed_at || d.created_at)), kvRow('Вход выполнен', fmtDT(d.created_at)), kvRow('Браузер', d.user_agent || '—'));
+  const btn = el('button', 'settings-row settings-row--color-danger', null); btn.type = 'button';
+  const bi = el('span', 'settings-row__icon', 'logout'); bi.setAttribute('aria-hidden', 'true'); btn.append(bi, el('span', 'settings-row__label', 'Завершить сеанс'));
+  btn.onclick = async () => {
+    if (!(await askConfirm('Завершить сеанс на этом устройстве? Его ключи будут удалены.', 'Завершить'))) return;
+    btn.disabled = true;
+    try {
+      await revokeSession(d); dlg.close();
+      if (d.is_current) { $('sheetDlg').close(); await doLogout(); return; }
+      removed(); toast('Сеанс завершён', 3000);
+    } catch (e) { btn.disabled = false; toast('Не удалось завершить сеанс: ' + ruErr(e), 3000); }
+  };
+  b.append(btn); dlg.showModal();
+}
+$('devClose').onclick = () => $('devDlg').close();
 $('rowDevices').onclick = async () => {
   try {
-    const devs = await loadDevices(true), cur = E2E && E2E.deviceId();
-    const nodes = [el('p', 'hint small', 'Устройства, на которых для вас созданы ключи шифрования. Удалить устройство можно, выйдя на нём.')];
-    if (!devs.length) nodes.push(el('p', 'hint', 'Нет устройств с ключами'));
-    for (const d of devs) { const box = el('div', 'dev-item'); box.append(el('b', '', (d.device_id === cur ? 'Это устройство · ' : '') + d.device_id.slice(0, 8)), kvRow('Ключи обновлены', fmtDT(d.updated_at)), kvRow('Отпечаток ключа', await fpOf(d.identity_pub), true)); nodes.push(box); }
+    const devs = await loadDevices(true);
+    const cur = devs.find(x => x.is_current), others = devs.filter(x => !x.is_current).sort((x, y) => new Date(y.refreshed_at || y.created_at) - new Date(x.refreshed_at || x.created_at));
+    const nodes = [];
+    const top = el('div', 'settings-group'); top.append(el('div', 'settings-group__title', 'Это устройство'));
+    if (cur) { const u = uaName(cur.user_agent), r = el('div', 'settings-row dev-cur'); const ic = el('span', 'settings-row__icon', u.icon); ic.setAttribute('aria-hidden', 'true'); const m = el('span', 'settings-row__label'); const st = el('small', ''); st.append(document.createTextNode((cur.ip ? cur.ip + ' · ' : '')), el('span', 'online', 'в сети')); m.append(el('span', '', u.name), st); r.append(ic, m); top.append(r); }
+    else top.append(el('div', 'settings-row', 'Текущий сеанс не найден'));
+    const all = el('button', 'settings-row settings-row--color-danger'); all.type = 'button';
+    const ai = el('span', 'settings-row__icon', 'logout'); ai.setAttribute('aria-hidden', 'true'); all.append(ai, el('span', 'settings-row__label', 'Завершить все другие сеансы'));
+    const list = el('div', 'settings-group'); list.append(el('div', 'settings-group__title', 'Активные сеансы'));
+    const paint = () => { const n = (myDevs || []).filter(x => !x.is_current).length; all.hidden = n < 1; list.hidden = n < 1; };
+    for (const d of others) list.append(devRow(d, paint));
+    all.onclick = async () => {
+      const left = (myDevs || []).filter(x => !x.is_current);
+      if (!(await askConfirm(`Завершить все другие сеансы (${left.length})? Их ключи будут удалены.`, 'Завершить'))) return;
+      all.disabled = true; let fail = 0;
+      for (const d of left) { try { await revokeSession(d); } catch (e) { fail++; console.warn('revoke', e); } }
+      all.disabled = false;
+      list.querySelectorAll('.dev-row').forEach(r => r.classList.add('gone')); setTimeout(() => { list.querySelectorAll('.dev-row').forEach(r => r.remove()); for (const d of myDevs.filter(x => !x.is_current)) list.append(devRow(d, paint)); paint(); }, 250);
+      toast(fail ? `Не удалось завершить ${fail} из ${left.length}` : 'Сеансы завершены', 3000);
+    };
+    top.append(all); paint();
+    nodes.push(top, list);
     sheet('Устройства', nodes);
-  } catch (e) { toast('Не удалось загрузить устройства: ' + ruErr(e)); }
+  } catch (e) { toast('Не удалось загрузить устройства: ' + ruErr(e), 3000); }
 };
 $('rowThisDev').onclick = async () => {
   const id = E2E && E2E.deviceId();
   let fp = '—';
-  if (id) { try { const devs = await loadDevices(true); const d = devs.find(x => x.device_id === id); fp = d ? await fpOf(d.identity_pub) : 'ключи не найдены на сервере'; } catch (e) { fp = 'не удалось загрузить'; } }
+  if (id) { try { const { data: d, error } = await sb.from('devices_keys').select('identity_pub').eq('device_id', id).maybeSingle(); if (error) throw error; fp = d ? await fpOf(d.identity_pub) : 'ключи не найдены на сервере'; } catch (e) { fp = 'не удалось загрузить'; } }
   sheet('Это устройство', [kvRow('ID устройства', id || 'ключи шифрования ещё не созданы', true), kvRow('Отпечаток ключа', fp, true), kvRow('Шифрование', 'Signal (сквозное): сообщения и файлы шифруются на устройстве'), el('p', 'hint small', 'Профиль (имя, ник, «о себе», аватар) виден всем и не шифруется.')]);
 };
 $('rowEmail').onclick = () => sheet('Почта', [kvRow('Почта аккаунта', me.email || '—'), el('p', 'hint small', 'Почта используется для входа. Её видите только вы.')]);
