@@ -224,7 +224,8 @@ async function loadChats() {
     const meta = document.createElement('div'); meta.className = 'meta';
     const nm = document.createElement('div'); nm.className = 'name'; txt(nm, c.kind === 'direct' ? (c.name || 'Личный чат') : (c.name || 'Группа'));
     const sub = document.createElement('div'); sub.className = 'sub';
-    txt(sub, c.last_sender ? (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? '📎 файл' : '🔒 зашифрованное сообщение') : 'Нет сообщений');
+    txt(sub, c.last_sender ? (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? 'Файл' : '🔒 зашифрованное сообщение') : 'Нет сообщений');
+    if (c.last_sender && c.last_has_file) { sub.prepend(msIcon('description', 'sub-ic')); filePreviewSoon(c, sub); }
     meta.append(nm, sub); li.append(ava, meta);
     const side = document.createElement('div'); side.className = 'side-col';
     const tm = document.createElement('span'); tm.className = 'time'; txt(tm, c.last_sender ? fmtListTime(c.last_at) : ''); side.append(tm);
@@ -396,7 +397,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zc').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015ze').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -425,7 +426,9 @@ const ctSig = c => c && (c.sk || Object.values(c).map(x => x && x.b).sort()[0]);
 function parsePayload(pt) {
   let o; try { o = JSON.parse(pt); } catch { return { t: pt }; }
   if (!o || typeof o !== 'object') return { t: String(pt) };
-  return { t: o.t || '', f: o.f && typeof o.f === 'object' ? o.f : null, fw: typeof o.fw === 'string' ? o.fw.slice(0, 64) : null };
+  // caption — подпись к вложению (отдельное поле того же payload; старые клиенты его игнорируют). t — показываемый текст
+  const f = o.f && typeof o.f === 'object' ? o.f : null, cap = f && typeof o.caption === 'string' ? o.caption.slice(0, 4000) : '';
+  return { t: (o.t || '') || cap, t0: o.t || '', caption: cap, f, fw: typeof o.fw === 'string' ? o.fw.slice(0, 64) : null };
 }
 async function decryptPayload(m) {
   const sig = ctSig(m.ciphertext);
@@ -466,8 +469,9 @@ async function renderMsg(m, d) {
         fb.title = 'Скачать и расшифровать';
         txt(fb, '📎 ' + (pl.f.n || 'файл') + (pl.f.s ? ' · ' + fmtSize(pl.f.s) : ''));
         fb.onclick = () => { fb.disabled = true; downloadFile(pl.f, !mine).catch(e => toastLong(e.userMsg || ruErr(e))).finally(() => { fb.disabled = false; }); };
-        const pv = imagePreview(pl.f); if (pv) d.append(pv);
-        d.append(fb);
+        const pv = imagePreview(pl.f, pl.t, !mine);
+        if (pv) { d.insertBefore(pv, b); d.classList.add('has-img'); if (!pl.t) d.classList.add('img-only'); } // подпись под картинкой; скачать — в просмотре
+        else d.append(fb);
       }
       lock.className = 'lock'; lock.title = 'Сквозное шифрование'; txt(lock, '🔒');
     } else { b.className = 'body e2e'; txt(b, pl && pl.other ? 'зашифровано для другого устройства' : pl && pl.fail ? 'не удалось расшифровать' : 'зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
@@ -706,7 +710,7 @@ async function doForward(target) {
     const fw = x.pl.fw || (x.m.sender_id === me.id ? displayName(profiles[me.id]) : displayName(profiles[x.m.sender_id]));
     if (x.pl.f) {
       const plain = await fetchFilePlain(x.pl.f); // расшифровали — и ниже заново шифруем новым ключом AES и для нового чата
-      await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.t || '', fw);
+      await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.caption || x.pl.t || '', fw);
     } else await sendPayload(target, JSON.stringify({ v: 1, t: x.pl.t, fw }), { forwarded: true });
     toast('Переслано');
     if (!currentChat || currentChat.id !== target.id) loadChatsSoon();
@@ -1028,10 +1032,7 @@ $('fileInput').onchange = async () => {
   const file = $('fileInput').files[0]; $('fileInput').value = '';
   if (!file || !currentChat) return;
   if (file.size <= 0 || file.size > MAX_FILE) return toastLong('Файл пустой или больше 25 МБ');
-  const chat = currentChat, btn = $('attachBtn'); btn.disabled = true; btn.firstElementChild.textContent = 'hourglass_empty';
-  try { await sendFile(chat, file); }
-  catch (e) { toastLong(e.userMsg || ruErr(e)); }
-  finally { btn.disabled = false; btn.firstElementChild.textContent = 'attach_file'; }
+  fileSheet(file);
 };
 async function sendFile(chat, file, extra, caption, fw) {
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
@@ -1043,7 +1044,9 @@ async function sendFile(chat, file, extra, caption, fw) {
   const { error } = await sb.storage.from('chat-files').upload(path, new Blob([enc.ct], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: false });
   if (error) throw error;
   const f = { p: path, n: safeName(file.name), s: plain.length, m: file.type || '', k: enc.k, iv: enc.iv, h: enc.h };
-  try { await sendPayload(chat, JSON.stringify(fw ? { v: 1, t: caption || '', f, fw } : { v: 1, t: caption || '', f }), extra); }
+  // подпись — только внутри зашифрованного payload (поле caption), на сервер открытым текстом не уходит
+  const pl = { v: 1, t: '', f }; if (caption) pl.caption = String(caption).slice(0, 4000); if (fw) pl.fw = fw;
+  try { await sendPayload(chat, JSON.stringify(pl), extra); }
   catch (e) { await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e; }
 }
 async function fetchFilePlain(f) {
@@ -1063,7 +1066,7 @@ function imgMime(f) {
   const m = String(f.m || '').toLowerCase(); if (Object.values(IMG_MIME).includes(m)) return m;
   const ext = String(f.n || '').toLowerCase().split('.').pop(); return IMG_MIME[ext] || null; // SVG не показываем
 }
-function imagePreview(f) {
+function imagePreview(f, caption, fromOther) {
   const mime = imgMime(f); if (!mime || !f.p || (f.s && f.s > 15 * 1048576)) return null;
   const box = document.createElement('div'); box.className = 'img-prev loading'; txt(box, f.s ? fmtSize(f.s) : '…');
   (imgUrls[f.p] = imgUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: mime }))))
@@ -1071,15 +1074,89 @@ function imagePreview(f) {
       const im = document.createElement('img'); im.alt = safeName(f.n); im.src = url;
       im.onload = () => { box.textContent = ''; box.classList.remove('loading'); box.append(im); };
       im.onerror = () => { txt(box, 'Не удалось показать картинку'); };
-      box.onclick = ev => { ev.stopPropagation(); openImage(url, im.alt); };
+      box.onclick = ev => { ev.stopPropagation(); openImage(url, im.alt, f, caption, fromOther); };
     })
     .catch(() => { delete imgUrls[f.p]; txt(box, 'Не удалось загрузить картинку'); box.classList.remove('loading'); });
   return box;
 }
-function openImage(url, alt) {
+// Диалог поверх экрана с записью в истории: «Назад» в браузере закрывает его
+function overlayHistory(dlg) {
+  const tag = dlg.id + ':' + Date.now();
+  history.pushState({ ...(history.state || {}), ov: tag }, '', location.href);
+  const onPop = () => { if (dlg.open) { dlg.dataset.popped = '1'; dlg.close(); } };
+  window.addEventListener('popstate', onPop, { once: true });
+  dlg.addEventListener('close', () => {
+    window.removeEventListener('popstate', onPop);
+    if (!dlg.dataset.popped && history.state && history.state.ov === tag) history.back();
+    delete dlg.dataset.popped;
+  }, { once: true });
+}
+function msIcon(name, cls) { const i = document.createElement('span'); i.className = 'ms' + (cls ? ' ' + cls : ''); i.setAttribute('aria-hidden', 'true'); txt(i, name); return i; }
+// Превью вложения в списке чатов: расшифровываем последнее сообщение локально (сервер знает только last_has_file)
+const lastPrev = {}; // chat_id + last_at → {icon, text}
+async function filePreviewSoon(c, sub) {
+  const key = c.id + '|' + c.last_at;
+  const paint = v => { if (!v || !sub.isConnected) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
+  if (lastPrev[key]) return paint(lastPrev[key]);
+  try {
+    const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (!data || !data.ciphertext) return;
+    const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other || !pl.f) return;
+    const img = !!imgMime(pl.f);
+    paint(lastPrev[key] = { icon: img ? 'image' : 'description', text: img ? (pl.caption || pl.t || 'Фото') : (pl.caption || safeName(pl.f.n)) });
+  } catch (e) { /* остаётся «Файл» */ }
+}
+function iconBtn(name, label, cls) { const b = document.createElement('button'); b.type = 'button'; b.className = 'icon ' + (cls || ''); b.setAttribute('aria-label', label); b.title = label; b.append(msIcon(name)); return b; }
+function openImage(url, alt, f, caption, fromOther) {
   let v = $('imgView');
-  if (!v) { v = document.createElement('dialog'); v.id = 'imgView'; v.className = 'img-view'; v.onclick = () => v.close(); document.body.append(v); }
-  v.textContent = ''; const im = document.createElement('img'); im.src = url; im.alt = alt || ''; v.append(im); v.showModal();
+  if (!v) {
+    v = document.createElement('dialog'); v.id = 'imgView'; v.className = 'img-view'; document.body.append(v);
+    v.addEventListener('click', ev => { if (ev.target === v || ev.target.classList.contains('iv-stage')) v.close(); });
+    let y0 = null; // свайп вниз закрывает
+    v.addEventListener('pointerdown', ev => { y0 = ev.clientY; });
+    v.addEventListener('pointerup', ev => { if (y0 != null && ev.clientY - y0 > 80) v.close(); y0 = null; });
+  }
+  v.textContent = '';
+  const stage = document.createElement('div'); stage.className = 'iv-stage';
+  const im = document.createElement('img'); im.src = url; im.alt = alt || ''; im.draggable = false; stage.append(im);
+  const close = iconBtn('close', 'Закрыть', 'iv-close'); close.onclick = () => v.close();
+  v.append(stage, close);
+  if (f) { const dl = iconBtn('download', 'Скачать', 'iv-dl'); dl.onclick = () => { dl.disabled = true; downloadFile(f, fromOther).catch(e => toastLong(e.userMsg || ruErr(e))).finally(() => { dl.disabled = false; }); }; v.append(dl); }
+  if (caption) { const c = document.createElement('div'); c.className = 'iv-cap'; txt(c, caption); v.append(c); }
+  v.showModal(); overlayHistory(v);
+}
+// ---------- отправка файла с подписью (подпись = поле t того же зашифрованного payload {v:1,t,f}) ----------
+function fileSheet(file) {
+  let d = $('fileDlg');
+  if (!d) { d = document.createElement('dialog'); d.id = 'fileDlg'; d.className = 'file-sheet'; document.body.append(d); }
+  d.textContent = '';
+  const close = iconBtn('close', 'Отмена', 'fs-close'); close.onclick = () => d.close();
+  const body = document.createElement('div'); body.className = 'fs-body';
+  let url = null;
+  if (imgMime({ m: file.type, n: file.name })) {
+    url = URL.createObjectURL(file); const im = document.createElement('img'); im.className = 'fs-img'; im.alt = safeName(file.name); im.src = url; body.append(im);
+  } else {
+    const row = document.createElement('div'); row.className = 'fs-file';
+    const ic = msIcon('description'); ic.classList.add('fs-ic');
+    const t = document.createElement('div'); const n = document.createElement('div'); n.className = 'fs-name'; txt(n, safeName(file.name));
+    const sz = document.createElement('div'); sz.className = 'fs-size'; txt(sz, fmtSize(file.size)); t.append(n, sz); row.append(ic, t); body.append(row);
+  }
+  const bar = document.createElement('div'); bar.className = 'fs-bar';
+  const cap = document.createElement('textarea'); cap.rows = 1; cap.maxLength = 4000; cap.placeholder = 'Добавить подпись…'; cap.className = 'fs-cap';
+  cap.oninput = () => { cap.style.height = 'auto'; cap.style.height = Math.min(cap.scrollHeight, 140) + 'px'; };
+  const send = iconBtn('send', 'Отправить', 'fs-send');
+  bar.append(cap, send);
+  d.append(close, body, bar);
+  const chat = currentChat;
+  const go = async () => {
+    send.disabled = cap.disabled = true;
+    try { await sendFile(chat, file, undefined, cap.value.trim()); d.close(); }
+    catch (e) { toastLong(e.userMsg || ruErr(e)); send.disabled = cap.disabled = false; }
+  };
+  send.onclick = go;
+  cap.onkeydown = ev => { if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); if (!send.disabled) go(); } };
+  d.addEventListener('close', () => { if (url) URL.revokeObjectURL(url); }, { once: true });
+  d.showModal(); overlayHistory(d); cap.focus();
 }
 async function downloadFile(f, fromOther) {
   const name = safeName(f.n);

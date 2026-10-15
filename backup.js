@@ -39,7 +39,8 @@
   }
   /** Внутренний payload сайта {t,f:{p,n,s,k,iv,m,h},fw} → запись копии */
   function toEntry(m, pl) {
-    const e = { chat_id: m.chat_id, message_id: m.id, plaintext: pl.t || '', attachments: [] };
+    const e = { chat_id: m.chat_id, message_id: m.id, plaintext: (pl.t0 !== undefined ? pl.t0 : pl.t) || '', attachments: [] };
+    if (pl.caption) e.caption = pl.caption; // подпись к вложению (необязательное поле, v остаётся 1)
     if (m.sender_id) e.sender_id = m.sender_id; if (m.created_at) e.created_at = m.created_at;
     if (pl.f && pl.f.p) { const a = { path: pl.f.p, name: pl.f.n || 'file', size: pl.f.s || 0, key: pl.f.k, nonce: pl.f.iv }; if (pl.f.m) a.mime = pl.f.m; if (pl.f.h) a.sha256 = pl.f.h; e.attachments.push(a); }
     if (pl.fw) e.forwarded = { name: pl.fw };
@@ -53,6 +54,7 @@
     if (a && a.path && a.key && a.nonce) { o.f = { p: a.path, n: a.name || 'file', s: a.size || 0, k: a.key, iv: a.nonce }; if (a.mime) o.f.m = a.mime; if (a.sha256) o.f.h = a.sha256; }
     const fw = e.forwarded && (typeof e.forwarded === 'string' ? e.forwarded : e.forwarded.name || e.forwarded.fw);
     if (typeof fw === 'string' && fw) o.fw = fw.slice(0, 64);
+    if (o.f && typeof e.caption === 'string' && e.caption) o.caption = e.caption.slice(0, 4000);
     return { id: e.message_id, pt: JSON.stringify(o) };
   }
   const api = { DEFAULT_KDF, BadPass, deriveKey, newSalt, seal, open, toEntry, toCache, b64e, b64d };
