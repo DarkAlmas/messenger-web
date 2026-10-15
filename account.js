@@ -112,18 +112,27 @@ window.saveProfileNick = saveNick; window.NICK_MSG = MSG;
 
 // ---------- поиск по @username ----------
 const fIn = $('findUser'), fRes = $('findResults');
-let fSeq = 0, fTimer = null;
-const esc = s => s.replace(/[\\%_]/g, m => '\\' + m);
+let fSeq = 0, fTimer = null, findRpc = true;
+// Точный поиск: сначала rpc('find_user'), если функции ещё нет (42883/PGRST202) — eq по username, максимум 1 результат
+async function findUser(n) {
+  if (findRpc) {
+    const { data, error } = await sb.rpc('find_user', { username: n });
+    if (!error) { const r = Array.isArray(data) ? data[0] : data; return { list: r && r.id ? [r] : [] }; }
+    if (error.code === '42883' || error.code === 'PGRST202') findRpc = false; else return { error };
+  }
+  const { data, error } = await sb.from('profiles').select('*').eq('username', n).limit(1);
+  return error ? { error } : { list: data || [] };
+}
 fIn.addEventListener('input', () => {
   clearTimeout(fTimer); const my = ++fSeq;
   const q = normNick(fIn.value);
-  if (!fIn.value.trim().startsWith('@') || q.length < 1) { fRes.hidden = true; fRes.replaceChildren(); return; }
+  if (!fIn.value.trim().startsWith('@') || !NICK_RE.test(q)) { fRes.hidden = true; fRes.replaceChildren(); return; }
   fTimer = setTimeout(async () => {
-    const { data, error } = await sb.from('profiles').select('*').ilike('username', esc(q) + '%').order('username').limit(10);
+    const { list: found, error } = await findUser(q);
     if (my !== fSeq) return;
     fRes.replaceChildren(); const h = document.createElement('li'); h.className = 'sec'; txt(h, 'Глобальный поиск'); fRes.append(h);
-    const list = (data || []).filter(p => !me || p.id !== me.id);
-    if (error || !list.length) { const li = document.createElement('li'); li.className = 'empty'; txt(li, error ? ruErr(error) : 'Пользователь не найден'); fRes.append(li); }
+    const list = (found || []).filter(p => !me || p.id !== me.id).slice(0, 1);
+    if (error || !list.length) { const li = document.createElement('li'); li.className = 'empty'; txt(li, error ? (isRate(error) ? MSG.rate : ruErr(error)) : 'Пользователь не найден'); fRes.append(li); }
     for (const p of list) {
       const li = document.createElement('li'); li.tabIndex = 0;
       const a = document.createElement('span'); a.className = 'ava'; fillAvatar(a, p);
