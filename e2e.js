@@ -385,7 +385,7 @@ export async function encryptFile(plain) {
 export async function decryptFile(ct, kB64, ivB64, h) {
   const k = await crypto.subtle.importKey('raw', b64d(kB64), 'AES-GCM', false, ['decrypt']);
   const p = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(ivB64), tagLength: 128 }, k, ct));
-  if (h && hex(await crypto.subtle.digest('SHA-256', p)) !== h) throw new Error('Файл повреждён: контрольная сумма не совпала');
+  if (h && hex(await crypto.subtle.digest('SHA-256', p)) !== h) { const e = new Error('Файл повреждён'); e.userMsg = 'Файл повреждён'; e.corrupt = true; throw e; }
   return p;
 }
 

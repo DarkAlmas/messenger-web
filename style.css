@@ -238,7 +238,7 @@ button{border-radius:var(--radius-button)}
 .msg.mine .react.mine{border-color:rgba(255,255,255,.5)}
 #buildInfo{text-align:center;margin-top:12px;user-select:all}
 /* Material Symbols Rounded (Google, Apache 2.0), самохостинг: подмножество нужных значков */
-@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2?v=4) format('woff2')}
+@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2?v=5) format('woff2')}
 .ms,.settings-row__icon{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:'liga';-webkit-font-smoothing:antialiased;user-select:none;overflow:hidden;flex:none}
 .ms.s{font-size:16px;vertical-align:-3px}
 .ava.ms{font-family:'Material Symbols Rounded';font-weight:normal;font-size:24px}
@@ -349,3 +349,12 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .fs-bar{display:flex;align-items:flex-end;gap:8px}.fs-cap{flex:1;margin:0;resize:none;min-height:44px;border-radius:var(--radius-pill);padding:11px 16px;font:inherit;box-sizing:border-box}
 .file-sheet .fs-send{width:48px;height:48px;min-height:48px;flex:none;border-radius:50%;background:var(--color-primary);color:var(--color-on-primary)}.file-sheet .fs-send:hover{background:var(--color-primary);filter:brightness(1.08)}
 .sub .sub-ic,.sub-ic{font-size:16px;color:var(--color-text-secondary);vertical-align:-3px;margin-right:3px}
+/* строки файлов: обычный, повреждённый; загрузка превью */
+.msg .file-row{display:flex;align-items:center;gap:10px;margin:4px 0;padding:6px 6px 6px 8px;border-radius:12px;background:var(--color-hover);min-width:200px;max-width:100%}
+.msg.mine .file-row{background:#ffffff26}
+.file-row .fr-ic{font-size:32px;color:var(--color-primary)}.msg.mine .file-row .fr-ic{color:inherit}
+.file-row .fr-text{flex:1;min-width:0}.file-row .fr-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-row .fr-size{font-size:12px;color:var(--color-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.msg.mine .file-row .fr-size{color:inherit;opacity:.75}
+.file-row .fr-dl{color:inherit;flex:none}
+.file-row.broken .fr-ic{color:var(--color-danger)}.file-row.broken{cursor:default}
+.msg .img-prev.loading .spinner{width:28px;height:28px;border:3px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gspin .8s linear infinite}

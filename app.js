@@ -397,7 +397,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015ze').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zg').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -465,11 +465,8 @@ async function renderMsg(m, d) {
     if (pl && !pl.other && !pl.fail) {
       txt(b, pl.t); if (!pl.t) b.hidden = true;
       if (pl.f) {
-        const fb = document.createElement('button'); fb.type = 'button'; fb.className = 'file';
-        fb.title = 'Скачать и расшифровать';
-        txt(fb, '📎 ' + (pl.f.n || 'файл') + (pl.f.s ? ' · ' + fmtSize(pl.f.s) : ''));
-        fb.onclick = () => { fb.disabled = true; downloadFile(pl.f, !mine).catch(e => toastLong(e.userMsg || ruErr(e))).finally(() => { fb.disabled = false; }); };
-        const pv = imagePreview(pl.f, pl.t, !mine);
+        const fb = fileRow(pl.f, !mine);
+        const pv = imagePreview(pl.f, pl.t, !mine, bad => { pv.replaceWith(bad ? brokenRow(pl.f) : fb); d.classList.remove('has-img', 'img-only'); });
         if (pv) { d.insertBefore(pv, b); d.classList.add('has-img'); if (!pl.t) d.classList.add('img-only'); } // подпись под картинкой; скачать — в просмотре
         else d.append(fb);
       }
@@ -805,6 +802,7 @@ async function openChat(c, li) {
   for (const k of Object.keys(msgEls)) delete msgEls[k];
   txt($('chatTitle'), li.querySelector('.name') ? li.querySelector('.name').textContent : li.textContent);
   $('chatAva').hidden = true;
+  for (const k of Object.keys(imgUrls)) { Promise.resolve(imgUrls[k]).then(u => URL.revokeObjectURL(u)).catch(() => {}); delete imgUrls[k]; } // освобождаем blob: прошлого чата
   $('sendForm').hidden = false; $('messages').innerHTML = ''; $('messages').append(olderBtn); $('safetyBtn').hidden = true;
   if (c.kind === 'direct') {
     if (!peerId) { const { data: pm } = await sb.from('chat_members').select('user_id').eq('chat_id', c.id).neq('user_id', me.id).limit(1).maybeSingle(); peerId = pm ? pm.user_id : null; }
@@ -1066,17 +1064,60 @@ function imgMime(f) {
   const m = String(f.m || '').toLowerCase(); if (Object.values(IMG_MIME).includes(m)) return m;
   const ext = String(f.n || '').toLowerCase().split('.').pop(); return IMG_MIME[ext] || null; // SVG не показываем
 }
-function imagePreview(f, caption, fromOther) {
-  const mime = imgMime(f); if (!mime || !f.p || (f.s && f.s > 15 * 1048576)) return null;
-  const box = document.createElement('div'); box.className = 'img-prev loading'; txt(box, f.s ? fmtSize(f.s) : '…');
-  (imgUrls[f.p] = imgUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: mime }))))
+// Тип по сигнатуре расшифрованных байтов (m от отправителя не доверяем)
+/** Строка файла: значок description, имя, размер, кнопка download справа. Только скачивание (octet-stream), без открытия на сайте. */
+function fileRow(f, fromOther) {
+  const row = document.createElement('div'); row.className = 'file-row';
+  const t = document.createElement('div'); t.className = 'fr-text';
+  const n = document.createElement('div'); n.className = 'fr-name'; txt(n, safeName(f.n));
+  const z = document.createElement('div'); z.className = 'fr-size'; txt(z, f.s ? fmtSize(f.s) : '');
+  t.append(n, z);
+  const dl = iconBtn('download', 'Скачать и расшифровать', 'fr-dl');
+  dl.onclick = ev => {
+    ev.stopPropagation(); dl.disabled = true;
+    downloadFile(f, fromOther).catch(e => { if (e && e.corrupt) row.replaceWith(brokenRow(f)); else toastLong(e.userMsg || ruErr(e)); }).finally(() => { dl.disabled = false; });
+  };
+  row.append(msIcon('description', 'fr-ic'), t, dl);
+  return row;
+}
+/** Повреждённый файл (sha256 не совпал): только сообщение, без скачивания */
+function brokenRow(f) {
+  const row = document.createElement('div'); row.className = 'file-row broken';
+  const t = document.createElement('div'); t.className = 'fr-text';
+  const n = document.createElement('div'); n.className = 'fr-name'; txt(n, 'Файл повреждён');
+  const z = document.createElement('div'); z.className = 'fr-size'; txt(z, safeName(f.n));
+  t.append(n, z); row.append(msIcon('broken_image', 'fr-ic'), t);
+  return row;
+}
+function sniffImage(p) {
+  const b = i => p[i];
+  if (p.length > 3 && b(0) === 0xFF && b(1) === 0xD8 && b(2) === 0xFF) return 'image/jpeg';
+  if (p.length > 8 && b(0) === 0x89 && b(1) === 0x50 && b(2) === 0x4E && b(3) === 0x47) return 'image/png';
+  if (p.length > 6 && b(0) === 0x47 && b(1) === 0x49 && b(2) === 0x46 && b(3) === 0x38) return 'image/gif';
+  if (p.length > 12 && String.fromCharCode(b(0), b(1), b(2), b(3)) === 'RIFF' && String.fromCharCode(b(8), b(9), b(10), b(11)) === 'WEBP') return 'image/webp';
+  return null;
+}
+/** Превью только если: тип из белого списка, есть sha256 (h) и он совпал, сигнатура совпадает с типом. Иначе — обычный файл (onFallback). */
+function imagePreview(f, caption, fromOther, onFallback) {
+  const mime = imgMime(f); if (!mime || !f.p || !f.h || (f.s && f.s > 15 * 1048576)) return null;
+  const box = document.createElement('div'); box.className = 'img-prev loading'; box.setAttribute('aria-label', 'Загрузка ' + (f.s ? fmtSize(f.s) : ''));
+  const sp = document.createElement('span'); sp.className = 'spinner'; box.append(sp);
+  (imgUrls[f.p] = imgUrls[f.p] || fetchFilePlain(f).then(p => {
+    const real = sniffImage(p);
+    if (!real || real !== mime) { const e = new Error('not an image'); e.notImage = true; throw e; }
+    return URL.createObjectURL(new Blob([p], { type: real }));
+  }))
     .then(url => {
       const im = document.createElement('img'); im.alt = safeName(f.n); im.src = url;
       im.onload = () => { box.textContent = ''; box.classList.remove('loading'); box.append(im); };
       im.onerror = () => { txt(box, 'Не удалось показать картинку'); };
       box.onclick = ev => { ev.stopPropagation(); openImage(url, im.alt, f, caption, fromOther); };
     })
-    .catch(() => { delete imgUrls[f.p]; txt(box, 'Не удалось загрузить картинку'); box.classList.remove('loading'); });
+    .catch(e => {
+      delete imgUrls[f.p]; box.classList.remove('loading'); box.onclick = null;
+      if (e && (e.notImage || e.corrupt) && onFallback) return onFallback(!!e.corrupt); // не картинка — как файл; повреждён — строка ошибки
+      txt(box, 'Не удалось загрузить картинку');
+    });
   return box;
 }
 // Диалог поверх экрана с записью в истории: «Назад» в браузере закрывает его
