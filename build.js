@@ -1,1 +1,1 @@
-window.BUILD = { commit: 'f0a61ad', date: '15.10.2026 11:52 МСК' };
+window.BUILD = { commit: 'f975ff4', date: '15.10.2026 12:02 МСК' };
