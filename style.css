@@ -238,7 +238,7 @@ button{border-radius:var(--radius-button)}
 .msg.mine .react.mine{border-color:rgba(255,255,255,.5)}
 #buildInfo{text-align:center;margin-top:12px;user-select:all}
 /* Material Symbols Rounded (Google, Apache 2.0), самохостинг: подмножество нужных значков */
-@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2?v=5) format('woff2')}
+@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2?v=6) format('woff2')}
 .ms,.settings-row__icon{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:'liga';-webkit-font-smoothing:antialiased;user-select:none;overflow:hidden;flex:none}
 .ms.s{font-size:16px;vertical-align:-3px}
 .ava.ms{font-family:'Material Symbols Rounded';font-weight:normal;font-size:24px}
@@ -377,3 +377,14 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .app-banner .ab-x{background:none;border:0;padding:4px;cursor:pointer;color:inherit;display:flex}
 .cert-dlg .cd-toast{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:#323232;color:#fff;padding:6px 14px;border-radius:16px;font-size:13px}
 .cert-dlg{position:fixed}
+/* статусы исходящих (Material Symbols 16px) */
+.msg .ticks.ms{font-size:16px;line-height:1;vertical-align:-3px;color:var(--color-text-secondary)}
+.msg.mine .ticks.ms{color:inherit;opacity:.75}
+.msg .ticks.ms.read{color:var(--color-primary);opacity:1}
+.msg.mine .ticks.ms.read{color:var(--color-on-primary-container,#fff);opacity:1;filter:brightness(1.4)}
+.msg .ticks.ms.failed{color:var(--color-danger,#e53935);opacity:1;cursor:pointer}
+/* системная строка в чате */
+.sys-row{align-self:center;display:flex;align-items:center;gap:6px;margin:8px auto;padding:6px 12px;border-radius:16px;background:var(--color-surface-container,#eee);color:var(--color-text-secondary);font-size:13px;max-width:90%;text-align:center}
+.sys-row .sys-ic{font-size:16px}
+.sys-row .link{font-size:13px;padding:0}
+.peer-safety{margin-top:8px}

@@ -44,6 +44,9 @@ const jget = k => { try { return kv[k] ? JSON.parse(kv[k]) : {}; } catch { retur
 // Между вкладками — Web Locks: одно хранилище IndexedDB, ratchet продвигает только одна вкладка за раз.
 // Перед операцией, если другая вкладка что-то записала (ключ 'ver'), перечитываем состояние.
 let chain = Promise.resolve();
+// Другие вкладки узнают об изменениях (доверие к ключам, события смены ключа) и перечитывают общее хранилище IndexedDB
+const bc = typeof BroadcastChannel === 'function' ? new BroadcastChannel('msgr-e2e') : null;
+if (bc) bc.onmessage = () => { if (db) locked(async () => {}).then(() => dispatchEvent(new Event('e2e-changed'))).catch(() => {}); };
 async function syncFromDb() {
   if (!db) return;
   const v = await tx('readonly', s => s.get('ver'));
@@ -56,21 +59,28 @@ async function syncFromDb() {
 async function runLocked(fn) {
   await syncFromDb(); dirty = false;
   try { return await fn(); }
-  finally { if (dirty && db) { ver = Math.random().toString(36).slice(2); kv.ver = ver; await tx('readwrite', s => s.put(ver, 'ver')); dirty = false; } }
+  finally { if (dirty && db) { ver = Math.random().toString(36).slice(2); kv.ver = ver; await tx('readwrite', s => s.put(ver, 'ver')); dirty = false; if (bc) try { bc.postMessage(ver); } catch { /* */ } } }
 }
 // Блокировку между вкладками ждём не дольше LOCK_WAIT: зависшая/замороженная (Android Chrome в фоне) вкладка,
 // держащая 'msgr-e2e', иначе навсегда останавливала расшифровку и загрузку чата — сообщения молча не показывались.
 // Держим блокировку не дольше LOCK_HOLD: операция, ждущая сеть без ответа, отпускает очередь (её результат придёт позже).
 const LOCK_WAIT = 12000, LOCK_HOLD = 30000;
 export class LockBusy extends Error { constructor() { super('шифрование занято другой вкладкой этого браузера'); this.name = 'LockBusy'; this.userMsg = 'Шифрование занято другой вкладкой этого браузера. Закройте лишние вкладки сайта и обновите страницу.'; } }
-const holdCap = p => Promise.race([p, new Promise(r => setTimeout(() => { console.warn('e2e: операция дольше ' + LOCK_HOLD / 1000 + ' с — очередь шифрования освобождена'); r(); }, LOCK_HOLD))]);
+export class E2eTimeout extends Error { constructor() { super('операция шифрования не завершилась вовремя'); this.name = 'E2eTimeout'; this.userMsg = 'Шифрование не ответило вовремя — сообщение не отправлено. Повторите.'; } }
+// Причина частого «операция дольше 30 с»: таймер не снимался после завершения операции и срабатывал всегда.
+// Теперь: таймер снимается; если операция действительно зависла — очередь освобождается, а её поздний результат отбрасывается (ошибка E2eTimeout).
+function holdCap(p, onExpire) {
+  let t; const done = new Promise(r => { t = setTimeout(() => { console.warn('e2e: операция дольше ' + LOCK_HOLD / 1000 + ' с — очередь шифрования освобождена'); if (onExpire) onExpire(); r(); }, LOCK_HOLD); });
+  return Promise.race([p.finally(() => clearTimeout(t)), done]);
+}
 const locked = fn => {
   const run = () => {
     if (!navigator.locks) return runLocked(fn);
     let res, rej; const out = new Promise((a, b) => { res = a; rej = b; });
     const ac = typeof AbortController === 'function' ? new AbortController() : null;
     const t = ac && setTimeout(() => ac.abort(), LOCK_WAIT);
-    navigator.locks.request('msgr-e2e', ac ? { signal: ac.signal } : {}, () => { clearTimeout(t); const p = runLocked(fn); p.then(res, rej); return holdCap(p.catch(() => {})); })
+    let expired = false;
+    navigator.locks.request('msgr-e2e', ac ? { signal: ac.signal } : {}, () => { clearTimeout(t); const p = runLocked(fn); p.then(v => expired ? rej(new E2eTimeout()) : res(v), rej); return holdCap(p.catch(() => {}), () => { expired = true; rej(new E2eTimeout()); }); })
       .catch(e => { clearTimeout(t); if (e && e.name === 'AbortError') { console.error('e2e: блокировка msgr-e2e не получена за ' + LOCK_WAIT / 1000 + ' с (другая вкладка)'); rej(new LockBusy()); } else rej(e); });
     return out;
   };
@@ -142,7 +152,7 @@ function ensureReadyFor(sid) {
       // Новая сессия = новое устройство; доверие (trust/verified) к собеседникам того же пользователя сохраняем
       const keepTrust = kv.uid === uid;
       // тот же пользователь: доверие и уже расшифрованный текст (pts:/pt:/ptg:) оставляем — история и резервная копия не теряются
-      const keep = k => keepTrust && /^(trust|pending|verified|pts|pt|ptg):/.test(k);
+      const keep = k => keepTrust && /^(trust|pending|verified|kc|pts|pt|ptg):/.test(k);
       for (const k of Object.keys(kv)) if (!keep(k)) await del(k);
       store = Store.newDevice(); freshDev = true;
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
@@ -220,12 +230,13 @@ async function devicesFor(user) {
     }
     // Пустой ответ (собеседник без ключей, лимит, сбой) доверие НЕ сбрасывает; устройство убираем, только если сервер вернул другие устройства
     if (Object.keys(valid).length) for (const d of Object.keys(trust)) if (!valid[d]) delete trust[d];
-    const pending = jget('pending:' + user), first = !Object.keys(trust).length && kv['verified:' + user] == null;
+    let changed = false;
     for (const [d, o] of Object.entries(valid)) {
-      if (first) trust[d] = o.identity_pub; else if (trust[d] !== o.identity_pub) pending[d] = o.identity_pub;
+      if (trust[d] && trust[d] !== o.identity_pub) { changed = true; store.deleteSession(d); } // ключ этого устройства на сервере ≠ сохранённого
+      trust[d] = o.identity_pub; // новое устройство собеседника — не «смена ключа»
     }
     await put('trust:' + user, JSON.stringify(trust));
-    if (Object.keys(pending).length) await put('pending:' + user, JSON.stringify(pending));
+    if (changed) await keyChanged(user);
     for (const [d, o] of Object.entries(valid)) {
       if (trust[d] !== o.identity_pub) continue;
       await put('devuser:' + d, user);
@@ -234,11 +245,17 @@ async function devicesFor(user) {
     }
     await saveStore();
   }
-  if (kv['pending:' + user]) throw new KeyChange(user);
   return Object.keys(trust).filter(d => store.hasSession(d));
 }
 
-export const hasPendingChange = user => !!kv['pending:' + user];
+export const hasPendingChange = () => false; // смена ключа не блокирует: системная строка в чате (keyEvents)
+/** Событие «код безопасности изменился» — только локально (IndexedDB этого браузера), на сервер не уходит и с сервера не принимается. */
+async function keyChanged(user) {
+  const ev = jlist('kc:' + user); ev.push(new Date().toISOString()); await put('kc:' + user, JSON.stringify(ev.slice(-50)));
+  if (kv['verified:' + user]) await del('verified:' + user);
+  if (kv['pending:' + user]) await del('pending:' + user);
+}
+export const keyEvents = user => locked(async () => jlist('kc:' + user).filter(x => typeof x === 'string' && !isNaN(Date.parse(x)))); // с перечитыванием общего хранилища
 /** Принять новые ключи собеседника (как acceptKeys в Android). */
 export function acceptKeys(user) {
   return locked(async () => {
@@ -280,12 +297,25 @@ export function decryptDM(m) {
     if (kv[ck]) return kv[ck];
     let s;
     try { s = store.decrypt(e.f, e.t, e.b); }
-    catch (err) { const x = new Error('decrypt t=' + e.t + ' from ' + String(e.f).slice(0, 8) + ': ' + ((err && err.message) || err)); x.cause = err; throw x; }
+    catch (err) {
+      let msg = (err && err.message) || String(err);
+      // Новый identity у известного устройства: смену признаём, только если ключ на сервере действительно ≠ сохранённого
+      if (/untrusted identity/i.test(msg) && m.sender_id) {
+        const { data: row } = await sb.from('devices_keys').select('identity_pub').eq('device_id', e.f).maybeSingle();
+        const trust = jget('trust:' + m.sender_id);
+        if (row && row.identity_pub && trust[e.f] && row.identity_pub !== trust[e.f]) {
+          store.deleteSession(e.f); trust[e.f] = row.identity_pub; await put('trust:' + m.sender_id, JSON.stringify(trust)); delete claimedAt[m.sender_id];
+          await keyChanged(m.sender_id);
+          try { s = store.decrypt(e.f, e.t, e.b); msg = null; } catch (e2) { msg = (e2 && e2.message) || String(e2); }
+        }
+      }
+      if (msg) { const x = new Error('decrypt t=' + e.t + ' from ' + String(e.f).slice(0, 8) + ': ' + msg); x.cause = err; throw x; }
+    }
     await saveStore(); await put(ck, s);
     if (m.sender_id) {
       await put('devuser:' + e.f, m.sender_id);
       const trust = jget('trust:' + m.sender_id), ik = store.identityOf(e.f);
-      if (ik && trust[e.f] !== ik && kv['trust:' + m.sender_id] != null) { const p = jget('pending:' + m.sender_id); p[e.f] = ik; await put('pending:' + m.sender_id, JSON.stringify(p)); }
+      if (ik && trust[e.f] !== ik) { const was = trust[e.f]; trust[e.f] = ik; await put('trust:' + m.sender_id, JSON.stringify(trust)); if (was) await keyChanged(m.sender_id); }
     }
     return s;
   });

@@ -225,7 +225,8 @@ async function loadChats() {
     const nm = document.createElement('div'); nm.className = 'name'; txt(nm, c.kind === 'direct' ? (c.name || 'Личный чат') : (c.name || 'Группа'));
     const sub = document.createElement('div'); sub.className = 'sub';
     txt(sub, c.last_sender ? (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? 'Файл' : '🔒 зашифрованное сообщение') : 'Нет сообщений');
-    if (c.last_sender && c.last_has_file) { sub.prepend(msIcon('description', 'sub-ic')); filePreviewSoon(c, sub); }
+    if (c.last_sender && c.last_has_file) sub.prepend(msIcon('description', 'sub-ic'));
+    sub.dataset.key = c.id + '|' + c.last_at; if (c.last_sender) filePreviewSoon(c, sub);
     meta.append(nm, sub); li.append(ava, meta);
     const side = document.createElement('div'); side.className = 'side-col';
     const tm = document.createElement('span'); tm.className = 'time'; txt(tm, c.last_sender ? fmtListTime(c.last_at) : ''); side.append(tm);
@@ -397,7 +398,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zk').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zl').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -482,6 +483,7 @@ async function renderMsg(m, d) {
     b.className = 'body e2e'; txt(b, 'Расшифровка…'); // пока ждём расшифровку — не пустой пузырь
     pl = await decryptPayloadT(m, d);
     if (pl && !pl.other && !pl.fail && !pl.pending) {
+      notePreview(m, pl);
       b.className = 'body'; txt(b, pl.t); if (!pl.t) b.hidden = true;
       if (pl.f) {
         const fb = fileRow(pl.f, !mine);
@@ -508,7 +510,7 @@ async function renderMsg(m, d) {
   if (m.edited_at) { const e = document.createElement('span'); txt(e, 'изм.'); foot.append(e); }
   const tm = document.createElement('time'); tm.dateTime = m.created_at; txt(tm, fmtTime(m.created_at));
   foot.append(lock, tm);
-  if (mine) { const t = document.createElement('span'); t.className = 'ticks'; foot.append(t); }
+  if (mine) { const t = document.createElement('span'); t.className = 'ticks'; foot.append(t); delete d.dataset.state; }
   d.append(foot);
   paintReacts(m.id, d);
   if (mine) paintTicks(d);
@@ -843,7 +845,7 @@ async function openChat(c, li) {
       if (p) txt($('chatTitle'), displayName(p)); fillAvatar($('chatAva'), p); paintSub();
     });
     // Не ждём шифрование перед загрузкой сообщений: зависшая инициализация не должна прятать чат
-    if (peerId) e2eStart().then(ok => ok && E2E.peerHasKeys(peerId)).then(h => { if (currentChat === c) { $('safetyBtn').hidden = !h; safetyLabel(); } })
+    if (peerId) e2eStart().then(ok => ok && E2E.peerHasKeys(peerId)).then(h => { if (currentChat === c) { peerKeys = !!h; paintKeyEvents(); } })
       .catch(e => { if (currentChat === c) { console.warn('claim_prekeys', e); toast('Не удалось получить ключи собеседника: ' + ruErr(e)); } });
   } else {
     fillAvatar($('chatAva'), { display_name: c.title || '?', id: c.id });
@@ -866,7 +868,7 @@ async function openChat(c, li) {
   $('messages').scrollTop = $('messages').scrollHeight;
   (async () => {
     for (let i = 0; i < list.length; i++) { if (currentChat !== c) return; if (msgEls[list[i].id] === els[i]) await renderSafe(list[i], els[i]); }
-    if (currentChat === c) { $('messages').scrollTop = $('messages').scrollHeight; redoSeps(); paintPinBar(); }
+    if (currentChat === c) { paintKeyEvents(); $('messages').scrollTop = $('messages').scrollHeight; redoSeps(); paintPinBar(); }
   })();
   if (data && data.length) oldestAt = data[0].created_at;
   olderBtn.hidden = !(data && data.length === PAGE);
@@ -944,11 +946,15 @@ function isRead(at) {
   const others = Object.values(readState);
   return others.length > 0 && others.every(r => r && new Date(r) >= new Date(at));
 }
+function isDelivered(at) { return currentChat && currentChat.kind === 'direct' && (lastSeen === 'online' || (lastSeen && !isNaN(Date.parse(lastSeen)) && new Date(lastSeen) >= new Date(at))); }
 function paintTicks(d) {
   const t = d.querySelector('.ticks'); if (!t) return;
-  const r = isRead(d.dataset.at);
-  t.classList.toggle('read', r); txt(t, r ? '✓✓' : '✓');
-  t.title = r ? 'Прочитано' : 'Отправлено'; t.setAttribute('aria-label', t.title);
+  const st = d.dataset.state;
+  const [ic, title, cls] = st === 'sending' ? ['schedule', 'Отправляется', 'sending'] : st === 'failed' ? ['error', 'Не отправлено — нажмите', 'failed']
+    : isRead(d.dataset.at) ? ['done_all', 'Прочитано', 'read'] : isDelivered(d.dataset.at) ? ['done_all', 'Доставлено', 'delivered'] : ['check', 'Отправлено', 'sent'];
+  t.className = 'ticks ms ' + cls; txt(t, ic); t.title = title; t.setAttribute('aria-label', title);
+  if (st === 'failed') { t.setAttribute('role', 'button'); t.tabIndex = 0; t.onclick = ev => { ev.stopPropagation(); outMenu(ev, d.dataset.id); }; }
+  else { t.removeAttribute('role'); t.removeAttribute('tabindex'); t.onclick = null; }
 }
 function paintAllTicks() { document.querySelectorAll('#messages .msg.mine').forEach(paintTicks); }
 setInterval(() => { if (currentChat && document.visibilityState === 'visible') loadReadState(); }, 8000);
@@ -989,9 +995,49 @@ $('sendForm').onsubmit = async e => {
     return;
   }
   $('msgInput').value = ''; cancelCompose();
-  try { await sendPayload(chat, JSON.stringify({ v: 1, t: body }), rt ? { reply_to: rt } : null); if (chan) chan.send({ type: 'broadcast', event: 'typing', payload: { u: me.id, stop: true } }).catch(() => {}); lastTypingSent = 0; }
-  catch (err) { $('msgInput').value = body; if (rt) startReply(rt); toastLong(err && err.userMsg ? err.userMsg : ruErr(err)); }
+  outSend({ chat, kind: 'text', text: body, extra: rt ? { reply_to: rt } : {} });
+  if (chan) chan.send({ type: 'broadcast', event: 'typing', payload: { u: me.id, stop: true } }).catch(() => {}); lastTypingSent = 0;
 };
+// ---------- исходящие: пузырь сразу, статус schedule → check → done_all → done_all (синий); ошибка → error, меню «Повторить»/«Удалить» ----------
+const outbox = {}; // id → задание
+function outBubble(job) {
+  const d = document.createElement('div'); d.dataset.id = job.id; msgEls[job.id] = d;
+  d.className = 'msg mine'; d.dataset.at = new Date().toISOString(); d.dataset.sender = me.id; d.dataset.state = 'sending';
+  const b = document.createElement('span'); b.className = 'body'; txt(b, job.kind === 'text' ? job.text : (job.caption || job.file.name)); d.append(b);
+  const foot = document.createElement('div'); foot.className = 'foot';
+  const tm = document.createElement('time'); txt(tm, fmtTime(d.dataset.at)); const t = document.createElement('span'); t.className = 'ticks';
+  foot.append(tm, t); d.append(foot);
+  const box = $('messages'); const e = box.querySelector('.empty-state'); if (e) e.remove();
+  box.appendChild(d); box.scrollTop = box.scrollHeight; paintTicks(d); return d;
+}
+async function outRun(job) {
+  const d = msgEls[job.id]; if (d) { d.dataset.state = 'sending'; paintTicks(d); }
+  try {
+    // повтор: если сообщение уже на сервере — просто отмечаем отправленным, ничего не загружаем заново
+    const had = job.tries ? await onServer(job.id).catch(() => null) : null;
+    job.tries = (job.tries || 0) + 1;
+    const extra = { ...job.extra, id: job.id };
+    const row = had || (job.kind === 'text' ? await sendPayload(job.chat, JSON.stringify({ v: 1, t: job.text }), extra) : await sendFile(job.chat, job.file, extra, job.caption, undefined, job));
+    delete outbox[job.id];
+    const el = msgEls[job.id];
+    if (el && el.dataset.state) { delete el.dataset.state; if (row && row.created_at) el.dataset.at = row.created_at; paintTicks(el); }
+    return true;
+  } catch (err) {
+    console.warn('send failed', job.id, err);
+    const el = msgEls[job.id]; if (el && el.dataset.state) { el.dataset.state = 'failed'; paintTicks(el); }
+    if (!job.toasted) { job.toasted = true; toastLong(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err)); } // тост один раз на сообщение
+    return false;
+  }
+}
+function outSend(job) { job.id = crypto.randomUUID(); outbox[job.id] = job; if (currentChat === job.chat) outBubble(job); return outRun(job); }
+function outMenu(ev, id) {
+  const job = outbox[id]; if (!job) return;
+  openMenu(ev, [{ t: 'Повторить', i: 'refresh', f: () => outRun(job) },
+    { t: 'Удалить', i: 'delete', danger: true, f: async () => { // только локальное неотправленное
+      if (await onServer(id).catch(() => null)) { toast('Сообщение уже отправлено'); const el = msgEls[id]; if (el) { delete el.dataset.state; paintTicks(el); } delete outbox[id]; return; }
+      if (job.uploaded) sb.storage.from('chat-files').remove([job.uploaded.path]).catch(() => {});
+      delete outbox[id]; const el = msgEls[id]; if (el) { el.remove(); delete msgEls[id]; } } }]);
+}
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
 const KEY_CHANGED = 'Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nНадёжнее сначала сверить код безопасности (кнопка «🔒 Код безопасности»). Нажмите «ОК», только если уверены, что это действительно собеседник: новый ключ будет принят.';
 async function encryptForPeer(pt, peer = peerId) {
@@ -1002,12 +1048,24 @@ async function encryptForPeer(pt, peer = peerId) {
     await E2E.acceptKeys(e.userId); return E2E.encryptDM(peer, pt);
   }
 }
+/** Есть ли сообщение с этим id на сервере (повтор после сбоя сети: вставка могла пройти). */
+async function onServer(id) {
+  const { data, error } = await sb.from('messages').select('id, created_at').eq('id', id).maybeSingle();
+  if (error) throw error; return data;
+}
 async function insertEncrypted(row, pt) {
+  if (!row.ciphertext || typeof row.ciphertext !== 'object') throw userErr('Сообщение не отправлено: нет шифротекста.' + NO_PLAIN); // открытым текстом — никогда
+  row.id = row.id || crypto.randomUUID(); // id задаёт клиент: повтор не создаёт дубль
   const sig = ctSig(row.ciphertext);
   sentOwn[sig] = pt;
-  const { data, error } = await sb.from('messages').insert(row).select('id').single();
+  let { data, error } = await sb.from('messages').insert(row).select('id, created_at').single();
+  if (error) { // ответ мог потеряться, а строка — записаться; дубль ключа (23505) = уже на сервере
+    const had = await onServer(row.id).catch(() => null);
+    if (had) { data = had; error = null; }
+  }
   if (error) { delete sentOwn[sig]; throw error; }
   await E2E.rememberOwn(data.id, pt, row.ciphertext.sk);
+  return data;
 }
 const NO_PLAIN = ' Сайт никогда не отправляет сообщения без сквозного шифрования.';
 /** Отправка только шифротекстом. Нет своих ключей — сначала регистрируем устройство; нет ключей у собеседника — понятная ошибка. */
@@ -1072,20 +1130,36 @@ $('fileInput').onchange = async () => {
   if (file.size <= 0 || file.size > MAX_FILE) return toastLong('Файл пустой или больше 25 МБ');
   fileSheet(file);
 };
-async function sendFile(chat, file, extra, caption, fw) {
+async function sendFile(chat, file, extra, caption, fw, job) {
+  if (job && job.uploaded) return sendPayload(chat, job.uploaded.pt, extra);
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
   const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
   if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
   const plain = new Uint8Array(await file.arrayBuffer());
   const enc = await E2E.encryptFile(plain);
   const path = `chat/${chat.id}/${crypto.randomUUID()}_file.bin`;
-  const { error } = await sb.storage.from('chat-files').upload(path, new Blob([enc.ct], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: false });
-  if (error) throw error;
+  await uploadEnc(path, enc.ct);
   const f = { p: path, n: safeName(file.name), s: plain.length, m: file.type || '', k: enc.k, iv: enc.iv, h: enc.h };
   // подпись — только внутри зашифрованного payload (поле caption), на сервер открытым текстом не уходит
   const pl = { v: 1, t: '', f }; if (caption) pl.caption = String(caption).slice(0, 4000); if (fw) pl.fw = fw;
-  try { await sendPayload(chat, JSON.stringify(pl), extra); }
+  if (job) { job.uploaded = { path, pt: JSON.stringify(pl) }; return sendPayload(chat, job.uploaded.pt, extra); } // при повторе файл заново не загружаем
+  try { return await sendPayload(chat, JSON.stringify(pl), extra); }
   catch (e) { await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e; }
+}
+/** Загрузка шифротекста в Storage: Bearer-токен, без cookies (credentials: 'omit' — иначе CORS с '*' падает), без автоповторов.
+ *  Объект уже есть (повтор после потерянного ответа) — считаем загруженным. */
+async function uploadEnc(path, ct) {
+  const { data } = await sb.auth.getSession(); const tok = data.session && data.session.access_token;
+  if (!tok) throw userErr('Нет сеанса — войдите снова.');
+  const r = await fetch(C.SUPABASE_URL + '/storage/v1/object/chat-files/' + path.split('/').map(encodeURIComponent).join('/'), {
+    method: 'POST', credentials: 'omit', cache: 'no-store',
+    headers: { Authorization: 'Bearer ' + tok, apikey: C.SUPABASE_KEY, 'Content-Type': 'application/octet-stream', 'x-upsert': 'false' },
+    body: new Blob([ct], { type: 'application/octet-stream' })
+  });
+  if (r.ok) return;
+  let j = null; try { j = await r.json(); } catch { /* */ }
+  if (r.status === 409 || /duplicate|already exists/i.test((j && (j.error || j.message)) || '')) return;
+  throw userErr('Файл не загружен: ' + ((j && (j.message || j.error)) || ('HTTP ' + r.status)));
 }
 async function fetchFilePlain(f) {
   const { data, error } = await sb.storage.from('chat-files').createSignedUrl(f.p, 60);
@@ -1175,6 +1249,18 @@ function overlayHistory(dlg) {
 function msIcon(name, cls) { const i = document.createElement('span'); i.className = 'ms' + (cls ? ' ' + cls : ''); i.setAttribute('aria-hidden', 'true'); txt(i, name); return i; }
 // Превью вложения в списке чатов: расшифровываем последнее сообщение локально (сервер знает только last_has_file)
 const lastPrev = {}; // chat_id + last_at → {icon, text}
+/** Текст превью в списке чатов по расшифрованному payload: фото → значок image + подпись, файл → description + имя, текст. */
+function prevOf(pl) {
+  if (!pl.f) return { icon: null, text: pl.t || '' };
+  const cap = pl.caption || pl.t || '';
+  return imgMime(pl.f) ? { icon: 'image', text: cap || 'Фото' } : { icon: 'description', text: cap || safeName(pl.f.n) };
+}
+/** Сообщение расшифровано в открытом чате (в т.ч. своё отправленное) — обновляем превью в списке, если оно последнее. */
+function notePreview(m, pl) {
+  const key = m.chat_id + '|' + m.created_at; lastPrev[key] = prevOf(pl);
+  const sub = document.querySelector('#chatList li[data-id="' + CSS.escape(m.chat_id) + '"] .sub');
+  if (sub && sub.dataset.key === key) { const v = lastPrev[key]; sub.textContent = ''; if (me && m.sender_id === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); }
+}
 async function filePreviewSoon(c, sub) {
   const key = c.id + '|' + c.last_at;
   const paint = v => { if (!v || !sub.isConnected) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
@@ -1182,10 +1268,8 @@ async function filePreviewSoon(c, sub) {
   try {
     const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (!data || !data.ciphertext) return;
-    const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other || !pl.f) return;
-    const img = !!imgMime(pl.f);
-    const cap = pl.caption || pl.t || '';
-    paint(lastPrev[key] = img ? { icon: 'image', text: cap || 'Фото' } : { icon: 'description', text: cap || safeName(pl.f.n) });
+    const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other || pl.pending) return;
+    paint(lastPrev[key] = prevOf(pl));
   } catch (e) { /* остаётся «Файл» */ }
 }
 function iconBtn(name, label, cls) { const b = document.createElement('button'); b.type = 'button'; b.className = 'icon ' + (cls || ''); b.setAttribute('aria-label', label); b.title = label; b.append(msIcon(name)); return b; }
@@ -1232,7 +1316,7 @@ function fileSheet(file) {
   const chat = currentChat;
   const go = async () => {
     send.disabled = cap.disabled = true;
-    try { await sendFile(chat, file, undefined, cap.value.trim()); d.close(); }
+    try { outSend({ chat, kind: 'file', file, caption: cap.value.trim(), extra: {} }); d.close(); }
     catch (e) { toastLong(e.userMsg || ruErr(e)); send.disabled = cap.disabled = false; }
   };
   send.onclick = go;
@@ -1250,7 +1334,28 @@ async function downloadFile(f, fromOther) {
 }
 
 // ---------- код безопасности ----------
-function safetyLabel() { if (peerId && E2E) txt($('safetyBtn'), E2E.hasPendingChange(peerId) ? 'Ключ изменился' : E2E.isVerified(peerId) ? 'Код проверен' : 'Код безопасности'); }
+let peerKeys = false;
+// Шапка чата не меняется: «Код безопасности» — в профиле собеседника
+function safetyLabel() { const b = $('peerSafety'); if (b && peerId && E2E) txt(b, E2E.isVerified(peerId) ? 'Код безопасности · проверен' : 'Код безопасности'); }
+/** Системные строки «Код безопасности @ника изменился» — только из локального хранилища этого браузера (E2E.keyEvents).
+ *  С сервера и из сообщений такие события не принимаются; ник — только textContent. */
+async function paintKeyEvents() {
+  const c = currentChat; if (!c || c.kind !== 'direct' || !peerId || !E2E) return;
+  const evs = await E2E.keyEvents(peerId).catch(() => []); if (currentChat !== c) return; const box = $('messages');
+  box.querySelectorAll('.sys-kc').forEach(x => x.remove());
+  if (!evs.length) return;
+  const p = await getProfile(peerId).catch(() => null); if (currentChat !== c) return;
+  for (const at of evs) {
+    const row = document.createElement('div'); row.className = 'sys-row sys-kc'; row.dataset.at = at; row.setAttribute('role', 'note');
+    const t = document.createElement('span'); t.textContent = 'Код безопасности ' + (p && p.username ? '@' + p.username : 'собеседника') + ' изменился';
+    const a = document.createElement('button'); a.type = 'button'; a.className = 'link'; a.textContent = 'Сверить';
+    a.onclick = () => showSafety().catch(e => toastLong(ruErr(e)));
+    row.append(msIcon('shield', 'sys-ic'), t, a);
+    const next = [...box.querySelectorAll('.msg')].find(m => m.dataset.at && m.dataset.at > at);
+    if (next) box.insertBefore(row, next); else box.append(row);
+  }
+}
+addEventListener('e2e-changed', () => { if (currentChat) { paintKeyEvents(); safetyLabel(); } });
 async function showSafety() {
   const peer = peerId; if (!peer) return;
   const nums = await E2E.safetyNumbers(peer);
@@ -1298,7 +1403,7 @@ async function scanQr() {
     throw new Error('QR не найден');
   } finally { stopScan(); }
 }
-$('safetyBtn').onclick = () => showSafety().catch(e => toastLong(ruErr(e)));
+$('peerSafety').onclick = () => { $('peerDlg').close(); showSafety().catch(e => toastLong(ruErr(e))); };
 $('findForm').onsubmit = e => { e.preventDefault(); window.findSubmit(); };
 
 $('backBtn').onclick = () => history.length > 1 && location.hash === '#chat' ? history.back() : closeChatView();
@@ -1308,6 +1413,7 @@ $('peerBtn').onclick = async () => {
   const p = await getProfile(peerId, true);
   fillAvatar($('peerAva'), p); txt($('peerName'), displayName(p)); txt($('peerNick'), p ? '@' + p.username : ''); $('peerNick').hidden = !p;
   txt($('peerBio'), p ? p.bio || 'Не указано' : ''); $('peerBio').hidden = !p; $('peerBio').classList.toggle('unset', !!p && !p.bio);
+  $('peerSafety').hidden = !peerKeys; safetyLabel();
   $('peerDlg').showModal();
 };
 $('closePeer').onclick = () => $('peerDlg').close();
@@ -1598,7 +1704,8 @@ async function onSession(session) {
   lastUid = uid;
   me = session ? session.user : null;
   $('auth').hidden = !!me; $('app').hidden = !me;
-  { const pw = $('password'); if (pw) pw.value = ''; } // пароль не остаётся в поле ни после входа, ни после выхода
+  { const pw = $('password'); if (pw) pw.value = ''; }
+  if (!me) { $('app').classList.remove('in-settings', 'in-chat'); currentChat = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); } // пароль не остаётся в поле ни после входа, ни после выхода
   if (me) {
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
