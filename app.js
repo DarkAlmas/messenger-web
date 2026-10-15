@@ -339,12 +339,10 @@ async function getProfile(id, fresh) {
 function displayName(p) { return p ? (p.display_name || '@' + p.username) : 'неизвестный'; }
 async function nameOf(id) { const p = await getProfile(id); return p ? displayName(p) : 'неизвестный'; }
 const COLORS = ['#5c6bc0', '#26a69a', '#ef6c00', '#ab47bc', '#42a5f5', '#ec407a', '#7cb342', '#8d6e63']; // как Ui.AVATAR в Android (docs/design)
-// docs/design/avatar_color.md (общий с Android): сумма UTF-16 кодов id по модулю 7
-const AVA_PALETTE = ['#E17076', '#FAA774', '#A695E7', '#7BC862', '#6EC9CB', '#65AADD', '#EE7AAE'];
 function colorFor(p) {
   if (p && /^#[0-9a-fA-F]{6}$/.test(p.avatar_color || '')) return p.avatar_color;
   const id = String(p && p.id || ''); let h = 0; for (let i = 0; i < id.length; i++) h += id.charCodeAt(i);
-  return AVA_PALETTE[h % 7];
+  return COLORS[h % COLORS.length]; // docs/design/avatar_color.md: палитра = цвета выбора в профиле, сумма UTF-16 кодов id mod 8
 }
 const avaUrls = {}; // путь в storage → { url, exp } (подписанная ссылка)
 function avatarEl(p, cls) {
@@ -393,7 +391,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015y').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015z').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
