@@ -232,8 +232,12 @@ async function devicesFor(user) {
       try { if (Store.verifyRow(JSON.stringify(o))) valid[o.device_id] = o; } catch { /* битая строка — пропускаем */ }
     }
     // Пустой ответ (собеседник без ключей, лимит, сбой) доверие НЕ сбрасывает; устройство убираем, только если сервер вернул другие устройства
+    // «Известный контакт» — считаем ДО удаления ушедших устройств: на сервере при выходе строка старого устройства удаляется,
+    // и новое устройство приходит вместо него (а не рядом, как в моке) — иначе trust пуст и строка «новое устройство» не появлялась
+    const known = Object.keys(trust).length > 0 || jlist('seen:' + user).length > 0;
+    if (Object.keys(trust).length) await markSeen(user, Object.keys(trust));
     if (Object.keys(valid).length) for (const d of Object.keys(trust)) if (!valid[d]) delete trust[d];
-    let changed = false, added = false; const known = Object.keys(trust).length > 0 || jlist('seen:' + user).length > 0;
+    let changed = false, added = false;
     for (const [d, o] of Object.entries(valid)) {
       if (trust[d] && trust[d] !== o.identity_pub) { changed = true; store.deleteSession(d); } // ключ этого устройства на сервере ≠ сохранённого
       else if (!trust[d] && known && !jlist('seen:' + user).includes(d)) added = true; // новое устройство (не первый контакт)

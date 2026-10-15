@@ -1,6 +1,9 @@
 const C = window.MSG_CONFIG;
 const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: true, storageKey: 'msgr-auth', autoRefreshToken: false, detectSessionInUrl: false } });
 const $ = id => document.getElementById(id);
+// Свои записи истории этой страницы: «назад» уходит в history.back() только по ним (иначе уводил на чужую/битую запись → 404)
+let ownNav = 0; function navPush(st, t, u) { ownNav++; history.pushState(st, t, u); }
+addEventListener('popstate', () => { if (ownNav > 0) ownNav--; });
 // Одна сессия (= одно устройство E2E) на браузер: сессия в localStorage, токен обновляет только одна вкладка-лидер.
 try { sessionStorage.removeItem('msgr-auth'); } catch (e) { /* старая версия хранила сессию во вкладке */ }
 if (navigator.locks) navigator.locks.request('msgr-auth-leader', () => { sb.auth.startAutoRefresh(); return new Promise(() => {}); });
@@ -400,7 +403,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zn').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zo').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -832,7 +835,7 @@ async function openChat(c, li) {
   document.querySelectorAll('#chatList li').forEach(x => x.classList.remove('active')); li.classList.add('active');
   const badge = li.querySelector('.badge'); if (badge) badge.remove();
   $('app').classList.add('in-chat'); $('app').classList.remove('in-settings');
-  if (location.hash !== '#chat') history.pushState({ v: 'chat' }, '', '#chat');
+  if (location.hash !== '#chat') navPush({ v: 'chat' }, '', '#chat');
   chatHasE2e = false; peerId = c.peer || null; peerUnknown = false;
   for (const k of Object.keys(msgEls)) delete msgEls[k];
   txt($('chatTitle'), li.querySelector('.name') ? li.querySelector('.name').textContent : li.textContent);
@@ -1267,12 +1270,12 @@ function imagePreview(f, caption, fromOther, onFallback) {
 // Диалог поверх экрана с записью в истории: «Назад» в браузере закрывает его
 function overlayHistory(dlg) {
   const tag = dlg.id + ':' + Date.now();
-  history.pushState({ ...(history.state || {}), ov: tag }, '', location.href);
+  navPush({ ...(history.state || {}), ov: tag }, '', location.href);
   const onPop = () => { if (dlg.open) { dlg.dataset.popped = '1'; dlg.close(); } };
   window.addEventListener('popstate', onPop, { once: true });
   dlg.addEventListener('close', () => {
     window.removeEventListener('popstate', onPop);
-    if (!dlg.dataset.popped && history.state && history.state.ov === tag) history.back();
+    if (!dlg.dataset.popped && history.state && history.state.ov === tag && ownNav > 0) history.back();
     delete dlg.dataset.popped;
   }, { once: true });
 }
@@ -1296,7 +1299,8 @@ function notePreview(m, pl) {
 async function filePreviewSoon(c, sub) {
   if (!me) return; const key = c.id + '|' + c.last_at;
   const paint = v => { if (!v || !sub.isConnected || !me) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
-  if (lastPrev[key]) return paint(lastPrev[key]);
+  // Из кэша — после текущего прохода loadChats: li ещё не в DOM (sub.isConnected=false), синхронная отрисовка молча пропускалась
+  if (lastPrev[key]) { const v = lastPrev[key]; queueMicrotask(() => paint(v)); return; }
   try {
     const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (!data || !data.ciphertext) return;
@@ -1441,7 +1445,7 @@ async function scanQr() {
 $('peerSafety').onclick = () => { $('peerDlg').close(); showSafety().catch(e => toastLong(ruErr(e))); };
 $('findForm').onsubmit = e => { e.preventDefault(); window.findSubmit(); };
 
-$('backBtn').onclick = () => history.length > 1 && location.hash === '#chat' ? history.back() : closeChatView();
+$('backBtn').onclick = () => ownNav > 0 && location.hash === '#chat' ? history.back() : (location.hash === '#chat' && history.replaceState(history.state, '', location.pathname + location.search), closeChatView());
 function closeChatView() { $('app').classList.remove('in-chat'); }
 $('peerBtn').onclick = async () => {
   if (!currentChat || currentChat.kind !== 'direct' || !peerId) return;
@@ -1477,7 +1481,7 @@ function openSettings(push = true, which = 'settings') {
   $('editBtn').hidden = which !== 'profile'; txt($('profMsg'), ''); $('editCard').hidden = true;
   txt($('pageTitle'), which === 'profile' ? 'Профиль' : 'Настройки');
   setNav(which);
-  if (push && location.hash !== '#' + which) history.pushState({ v: which }, '', '#' + which);
+  if (push && location.hash !== '#' + which) navPush({ v: which }, '', '#' + which);
   if (which === 'profile') fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
   else { let cv = null; try { cv = localStorage.getItem('msgr-seen'); } catch { /* */ }
     if (cv) paintSeenSeg(cv); else txt($('seenVal'), '…');
@@ -1491,12 +1495,12 @@ function closeSettings() { $('app').classList.remove('in-settings'); setNav('cha
 document.querySelectorAll('#bottomNav button').forEach(b => {
   b.onclick = () => {
     const t = b.dataset.nav;
-    if (t === 'chats') { if (/^#(profile|settings)$/.test(location.hash)) history.pushState({ v: 'chats' }, '', currentChat && $('app').classList.contains('in-chat') ? '#chat' : '#'); closeSettings(); }
+    if (t === 'chats') { if (/^#(profile|settings)$/.test(location.hash)) navPush({ v: 'chats' }, '', currentChat && $('app').classList.contains('in-chat') ? '#chat' : '#'); closeSettings(); }
     else openSettings(true, t);
   };
 });
 $('meBtn').onclick = () => openSettings(true, 'profile');
-$('settingsBack').onclick = () => /^#(profile|settings)$/.test(location.hash) ? history.back() : closeSettings();
+$('settingsBack').onclick = () => ownNav > 0 && /^#(profile|settings)$/.test(location.hash) ? history.back() : (/^#(profile|settings)$/.test(location.hash) && history.replaceState(history.state, '', location.pathname + location.search), closeSettings());
 window.addEventListener('popstate', () => {
   const m = /^#(profile|settings)$/.exec(location.hash);
   if (m) openSettings(false, m[1]); else closeSettings();
