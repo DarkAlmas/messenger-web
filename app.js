@@ -12,7 +12,7 @@ const olderBtn = document.getElementById('olderBtn'); // ссылка сохра
 function txt(el, s) { el.textContent = s; }
 // ---------- видимые ошибки: ничего не падает молча ----------
 function showErr(msg) {
-  const n = $('notice'); if (!n) { alert(msg); return; }
+  const n = $('notice'); if (!n) { console.warn(msg); return; }
   txt($('noticeText'), msg); n.hidden = false;
 }
 // снимаем баннер «Нет соединения…», как только запрос прошёл успешно
@@ -77,7 +77,7 @@ $('loginForm').onsubmit = async e => {
   try {
     if (regMode) {
       const username = normNick($('username').value);
-      if (!/^[a-z0-9_]{3,32}$/.test(username)) return txt($('authMsg'), 'Никнейм: 3–32 символа, только a-z, 0-9 и _');
+      if (!/^[a-z0-9_]{5,32}$/.test(username)) return txt($('authMsg'), 'Никнейм: 5–32 символа, только a-z, 0-9 и _');
       if (password.length < 10) return txt($('authMsg'), 'Пароль должен быть не короче 10 символов');
       const { error } = await sb.auth.signUp({ email, password, options: { data: { username, display_name: username } } });
       txt($('authMsg'), error ? ruErr(error) : 'Письмо с подтверждением отправлено на почту. Подтвердите и войдите.');
@@ -260,7 +260,7 @@ function chatMenuItems(c) {
 }
 async function chatPrefs(c, args, done) {
   const { error } = await sb.rpc('set_chat_prefs', { p_chat: c.id, ...args });
-  if (error) return alert(ruErr(error));
+  if (error) return toastLong(ruErr(error));
   toast(done); await loadChats();
 }
 let toastT = null;
@@ -289,6 +289,7 @@ async function notifyMsg(m) {
   n.onclick = () => { window.focus(); const li = document.querySelector(`#chatList li[data-id="${m.chat_id}"]`); if (li) li.click(); n.close(); };
 }
 document.addEventListener('visibilitychange', clearBadge);
+function toastLong(s) { toast(String(s), 4000); }
 function toast(s, ms = 2500) { const t = $('toast'); txt(t, s); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms); }
 
 // ---------- контекстное меню (правый клик / долгое нажатие) ----------
@@ -299,7 +300,7 @@ function openMenu(e, items) {
     const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); if (it.danger) b.className = 'danger-item';
     const ic = document.createElement('span'); ic.setAttribute('aria-hidden', 'true'); ic.className = 'ms'; txt(ic, it.i || ''); const tx = document.createElement('span'); txt(tx, it.t);
     b.append(ic, tx); b.dataset.act = it.t;
-    b.onclick = () => { closeMenu(); Promise.resolve().then(it.f).catch(err => alert(err.userMsg || ruErr(err))); };
+    b.onclick = () => { closeMenu(); Promise.resolve().then(it.f).catch(err => toastLong(err.userMsg || ruErr(err))); };
     m.append(b);
   }
   m.hidden = false;
@@ -338,10 +339,12 @@ async function getProfile(id, fresh) {
 function displayName(p) { return p ? (p.display_name || '@' + p.username) : 'неизвестный'; }
 async function nameOf(id) { const p = await getProfile(id); return p ? displayName(p) : 'неизвестный'; }
 const COLORS = ['#5c6bc0', '#26a69a', '#ef6c00', '#ab47bc', '#42a5f5', '#ec407a', '#7cb342', '#8d6e63']; // как Ui.AVATAR в Android (docs/design)
+// docs/design/avatar_color.md (общий с Android): сумма UTF-16 кодов id по модулю 7
+const AVA_PALETTE = ['#E17076', '#FAA774', '#A695E7', '#7BC862', '#6EC9CB', '#65AADD', '#EE7AAE'];
 function colorFor(p) {
-  if (p && /^#[0-9a-f]{6}$/.test(p.avatar_color || '')) return p.avatar_color;
-  let h = 0; for (const ch of String(p && p.id || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return COLORS[h % COLORS.length];
+  if (p && /^#[0-9a-fA-F]{6}$/.test(p.avatar_color || '')) return p.avatar_color;
+  const id = String(p && p.id || ''); let h = 0; for (let i = 0; i < id.length; i++) h += id.charCodeAt(i);
+  return AVA_PALETTE[h % 7];
 }
 const avaUrls = {}; // путь в storage → { url, exp } (подписанная ссылка)
 function avatarEl(p, cls) {
@@ -349,8 +352,9 @@ function avatarEl(p, cls) {
   fillAvatar(s, p); return s;
 }
 function avatarLetter(p) {
-  if (p && p.avatar_letter) return p.avatar_letter;
-  return (Array.from(String(p && (p.display_name || p.username) || '?').trim())[0] || '?').toUpperCase();
+  const a = p && String(p.avatar_letter || '').trim(); if (a) return a;
+  const n = p && String(p.display_name || '').trim() || p && String(p.username || '').replace(/^@+/, '').trim() || '';
+  return (Array.from(n)[0] || '?').toUpperCase();
 }
 function fillAvatar(s, p) {
   s.textContent = ''; s.hidden = false;
@@ -361,7 +365,7 @@ function fillAvatar(s, p) {
   if (path) avatarSigned(path).then(u => {
     if (!u || s.dataset.path !== path) return;
     const img = new Image(); img.alt = ''; img.referrerPolicy = 'no-referrer';
-    img.onload = () => { if (s.dataset.path === path) { s.textContent = ''; s.append(img); } };
+    img.onload = () => { if (s.dataset.path === path && !s.querySelector('img')) s.append(img); };
     img.src = u;
   });
 }
@@ -389,7 +393,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015x').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015y').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -458,7 +462,7 @@ async function renderMsg(m, d) {
         const fb = document.createElement('button'); fb.type = 'button'; fb.className = 'file';
         fb.title = 'Скачать и расшифровать';
         txt(fb, '📎 ' + (pl.f.n || 'файл') + (pl.f.s ? ' · ' + fmtSize(pl.f.s) : ''));
-        fb.onclick = () => { fb.disabled = true; downloadFile(pl.f, !mine).catch(e => alert(e.userMsg || ruErr(e))).finally(() => { fb.disabled = false; }); };
+        fb.onclick = () => { fb.disabled = true; downloadFile(pl.f, !mine).catch(e => toastLong(e.userMsg || ruErr(e))).finally(() => { fb.disabled = false; }); };
         const pv = imagePreview(pl.f); if (pv) d.append(pv);
         d.append(fb);
       }
@@ -664,7 +668,7 @@ function paintPinBar() {
   $('unpinBtn').hidden = !canPin();
 }
 $('pinOpen').onclick = () => { if (!pins.length) return; jumpTo(pins[pinIdx]); pinIdx = (pinIdx + 1) % pins.length; paintPinBar(); };
-$('unpinBtn').onclick = () => { if (pins.length && confirm('Открепить это сообщение?')) pinMsg(pins[pinIdx], false).catch(e => alert(ruErr(e))); };
+$('unpinBtn').onclick = () => { if (pins.length && confirm('Открепить это сообщение?')) pinMsg(pins[pinIdx], false).catch(e => toastLong(ruErr(e))); };
 async function pinMsg(id, on) {
   const { error } = await sb.rpc('pin_message', { p_msg: id, p_pin: on });
   if (error) throw error;
@@ -703,7 +707,7 @@ async function doForward(target) {
     } else await sendPayload(target, JSON.stringify({ v: 1, t: x.pl.t, fw }), { forwarded: true });
     toast('Переслано');
     if (!currentChat || currentChat.id !== target.id) loadChatsSoon();
-  } catch (e) { alert(e.userMsg || ruErr(e)); }
+  } catch (e) { toastLong(e.userMsg || ruErr(e)); }
 }
 
 // ---------- «в сети» / «был(а) в сети» и «печатает…» ----------
@@ -842,7 +846,7 @@ olderBtn.onclick = async () => {
     paintPinBar();
     if (data && data.length) oldestAt = data[data.length - 1].created_at;
     btn.hidden = !(data && data.length === PAGE);
-  } catch (e) { alert('Не удалось загрузить более ранние сообщения: ' + ruErr(e)); }
+  } catch (e) { toastLong('Не удалось загрузить более ранние сообщения: ' + ruErr(e)); }
   finally { btn.disabled = false; txt(btn, 'Загрузить более ранние сообщения'); }
 };
 /** Подписка на приватный канал чата. При ошибке (часто — протухший токен) один раз обновляем сессию, setAuth и подписываемся заново, без бесконечных повторов со старым токеном. */
@@ -931,12 +935,12 @@ $('sendForm').onsubmit = async e => {
     if (!x || body === x.pl.t) return cancelCompose();
     $('msgInput').value = ''; cancelCompose();
     try { await editEncrypted(x.m, JSON.stringify({ v: 1, t: body })); }
-    catch (err) { alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
+    catch (err) { toastLong(err && err.userMsg ? err.userMsg : ruErr(err)); }
     return;
   }
   $('msgInput').value = ''; cancelCompose();
   try { await sendPayload(chat, JSON.stringify({ v: 1, t: body }), rt ? { reply_to: rt } : null); if (chan) chan.send({ type: 'broadcast', event: 'typing', payload: { u: me.id, stop: true } }).catch(() => {}); lastTypingSent = 0; }
-  catch (err) { $('msgInput').value = body; if (rt) startReply(rt); alert(err && err.userMsg ? err.userMsg : ruErr(err)); }
+  catch (err) { $('msgInput').value = body; if (rt) startReply(rt); toastLong(err && err.userMsg ? err.userMsg : ruErr(err)); }
 };
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
 const KEY_CHANGED = 'Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nНадёжнее сначала сверить код безопасности (кнопка «🔒 Код безопасности»). Нажмите «ОК», только если уверены, что это действительно собеседник: новый ключ будет принят.';
@@ -1015,10 +1019,10 @@ $('attachBtn').onclick = () => $('fileInput').click();
 $('fileInput').onchange = async () => {
   const file = $('fileInput').files[0]; $('fileInput').value = '';
   if (!file || !currentChat) return;
-  if (file.size <= 0 || file.size > MAX_FILE) return alert('Файл пустой или больше 25 МБ');
+  if (file.size <= 0 || file.size > MAX_FILE) return toastLong('Файл пустой или больше 25 МБ');
   const chat = currentChat, btn = $('attachBtn'); btn.disabled = true; btn.firstElementChild.textContent = 'hourglass_empty';
   try { await sendFile(chat, file); }
-  catch (e) { alert(e.userMsg || ruErr(e)); }
+  catch (e) { toastLong(e.userMsg || ruErr(e)); }
   finally { btn.disabled = false; btn.firstElementChild.textContent = 'attach_file'; }
 };
 async function sendFile(chat, file, extra, caption, fw) {
@@ -1108,7 +1112,7 @@ async function showSafety() {
   $('matchBtn').onclick = async () => { if (confirm('Вы сравнили все 60 цифр с экраном собеседника, и они совпадают?')) { await E2E.markVerified(peer); st(); } };
   $('acceptBtn').onclick = async () => { if (confirm('Принять новый ключ? Делайте это, только если собеседник подтвердил смену устройства. Надёжнее — сначала сверить QR.')) { await E2E.acceptKeys(peer); st(); } };
   $('scanBtn').hidden = !('BarcodeDetector' in window && navigator.mediaDevices);
-  $('scanBtn').onclick = () => scanQr().then(check).catch(e => alert('Камера недоступна: ' + ruErr(e)));
+  $('scanBtn').onclick = () => scanQr().then(check).catch(e => toastLong('Камера недоступна: ' + ruErr(e)));
   $('closeSafety').onclick = () => { stopScan(); $('safetyDlg').close(); };
   $('safetyDlg').showModal();
 }
@@ -1127,25 +1131,33 @@ async function scanQr() {
     throw new Error('QR не найден');
   } finally { stopScan(); }
 }
-$('safetyBtn').onclick = () => showSafety().catch(e => alert(ruErr(e)));
+$('safetyBtn').onclick = () => showSafety().catch(e => toastLong(ruErr(e)));
 $('findForm').onsubmit = async e => {
   e.preventDefault();
   const nick = normNick($('findUser').value); if (!nick) return;
-  const { data: u, error: fe } = await sb.from('profiles').select('id').eq('username', nick).maybeSingle();
-  if (fe) return alert(ruErr(fe));
-  if (!u) return alert('Пользователь @' + nick + ' не найден');
-  if (u.id === me.id) return alert('Это ваш собственный никнейм');
-  const { data: chatId, error } = await sb.rpc('create_direct_chat', { p_other: u.id });
-  if (error) return alert(ruErr(error));
-  $('findUser').value = ''; await loadChats();
-  const li = document.querySelector(`#chatList li[data-id="${chatId}"]`); if (li) li.click();
+  const line = $('findLine'), btn = $('newDirect');
+  const say = (t, spin) => { line.className = 'find-line' + (spin ? ' spin' : ''); txt(line, t); line.hidden = !t; };
+  if (!/^[a-z0-9_]{5,32}$/.test(nick)) return say('Имя: 5–32 символа, a–z, 0–9, _');
+  btn.disabled = true; say('Ищем @' + nick + '…', true);
+  try {
+    const { list, error: fe } = await window.findUserExact(nick);
+    if (fe) return say(window.isRateErr(fe) ? 'Слишком часто, подождите немного' : ruErr(fe));
+    const u = list[0];
+    if (!u) return say('Пользователь @' + nick + ' не найден');
+    if (u.id === me.id) return say('Это ваше собственное имя пользователя');
+    const { data: chatId, error } = await sb.rpc('create_direct_chat', { p_other: u.id });
+    if (error) return say(ruErr(error));
+    say(''); $('findUser').value = ''; $('findResults').hidden = true; await loadChats();
+    const li = document.querySelector(`#chatList li[data-id="${chatId}"]`); if (li) li.click();
+  } finally { btn.disabled = false; }
 };
+$('findUser').addEventListener('input', () => { $('findLine').hidden = true; });
 $('backBtn').onclick = () => history.length > 1 && location.hash === '#chat' ? history.back() : closeChatView();
 function closeChatView() { $('app').classList.remove('in-chat'); }
 $('peerBtn').onclick = async () => {
   if (!currentChat || currentChat.kind !== 'direct' || !peerId) return;
   const p = await getProfile(peerId, true); if (!p) return;
-  fillAvatar($('peerAva'), p); txt($('peerName'), displayName(p)); txt($('peerNick'), '@' + p.username); txt($('peerBio'), p.bio || '');
+  fillAvatar($('peerAva'), p); txt($('peerName'), displayName(p)); txt($('peerNick'), '@' + p.username); txt($('peerBio'), p.bio || 'Не указано'); $('peerBio').classList.toggle('unset', !p.bio);
   $('peerDlg').showModal();
 };
 $('closePeer').onclick = () => $('peerDlg').close();
@@ -1220,7 +1232,7 @@ $('pLetter').oninput = () => { const p = profiles[me.id]; if (p) fillAvatar($('p
 function cleanBio(s) { return Array.from(String(s).replace(/\r\n?/g, '\n').replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, c => c === '\n' ? c : '')).join('').slice(0, 300); }
 function paintBioCount() { const n = $('pBio').value.length; txt($('bioCount'), String(n)); $('bioCount').parentNode.classList.toggle('bad', n >= 280); }
 $('pBio').oninput = () => { const v = cleanBio($('pBio').value); if (v !== $('pBio').value) $('pBio').value = v; paintBioCount(); };
-function paintProfHead(p) { txt($('profName'), displayName(p)); txt($('profNick'), '@' + (p.username || '')); txt($('profBio'), p.bio || 'Не указано'); paintMini(p); }
+function paintProfHead(p) { txt($('profName'), displayName(p)); txt($('profNick'), '@' + (p.username || '')); txt($('profBio'), p.bio || 'Не указано'); $('profBio').classList.toggle('unset', !p.bio); paintMini(p); }
 function paintMini(p) { if (!p) return; fillAvatar($('miniAva'), p); txt($('miniName'), displayName(p)); txt($('miniNick'), '@' + (p.username || '')); }
 $('editBtn').onclick = () => { $('editCard').hidden = !$('editCard').hidden; if (!$('editCard').hidden) $('pName').focus(); };
 $('miniHead').onclick = $('rowProfile').onclick = () => openSettings(true, 'profile');

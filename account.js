@@ -120,14 +120,14 @@ async function findUser(n) {
     if (!error) { const r = Array.isArray(data) ? data[0] : data; return { list: r && r.id ? [r] : [] }; }
     if (error.code === '42883' || error.code === 'PGRST202') findRpc = false; else return { error };
   }
-  const { data, error } = await sb.from('profiles').select('*').eq('username', n).limit(1);
-  return error ? { error } : { list: data || [] };
+  return { list: [], error: { message: 'Поиск временно недоступен' } }; // прямое чтение profiles по имени не используем
 }
 // Подсказка в «Глобальном поиске»: серая, красная только для неожиданных ошибок; текст через textContent (без HTML)
 function findHint(t, bad) {
   fRes.replaceChildren(); const h = document.createElement('li'); h.className = 'sec'; txt(h, 'Глобальный поиск');
   const li = document.createElement('li'); li.className = 'empty' + (bad ? ' bad' : ''); txt(li, t); fRes.append(h, li); fRes.hidden = false;
 }
+window.findUserExact = findUser; window.isRateErr = isRate;
 fIn.addEventListener('input', () => {
   clearTimeout(fTimer); const my = ++fSeq;
   const q = normNick(fIn.value);

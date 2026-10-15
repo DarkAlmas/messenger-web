@@ -323,3 +323,8 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .msg .img-prev img{display:block;max-width:260px;max-height:320px;width:auto;height:auto;border-radius:12px}
 .img-view{padding:0;border:0;background:transparent;max-width:100vw;max-height:100vh;cursor:zoom-out}.img-view::backdrop{background:#000d}
 .img-view img{display:block;max-width:96vw;max-height:94vh;object-fit:contain}
+/* аватар: буква под фото (прозрачное/битое фото не оставляет пустой круг), буква 40% диаметра */
+.ava{position:relative}.ava img{position:absolute;inset:0}.ava.sm{font-size:14px}.ava.xl{font-size:38px}
+.unset{color:var(--color-text-secondary)}
+.find-line{margin:-4px 12px 8px;font-size:13px;color:var(--color-text-secondary)}
+.find-line.spin::before{content:"";display:inline-block;width:10px;height:10px;margin-right:6px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gspin .8s linear infinite;vertical-align:-1px}
