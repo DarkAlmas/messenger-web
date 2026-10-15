@@ -397,7 +397,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zj').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zk').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1185,7 +1185,7 @@ async function filePreviewSoon(c, sub) {
     const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other || !pl.f) return;
     const img = !!imgMime(pl.f);
     const cap = pl.caption || pl.t || '';
-    paint(lastPrev[key] = img ? (cap ? { icon: null, text: '🖼 ' + cap } : { icon: 'image', text: 'Фото' }) : { icon: 'description', text: cap || safeName(pl.f.n) });
+    paint(lastPrev[key] = img ? { icon: 'image', text: cap || 'Фото' } : { icon: 'description', text: cap || safeName(pl.f.n) });
   } catch (e) { /* остаётся «Файл» */ }
 }
 function iconBtn(name, label, cls) { const b = document.createElement('button'); b.type = 'button'; b.className = 'icon ' + (cls || ''); b.setAttribute('aria-label', label); b.title = label; b.append(msIcon(name)); return b; }

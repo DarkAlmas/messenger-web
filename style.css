@@ -364,6 +364,16 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .app-banner{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--color-secondary-container,#e8def8);color:var(--color-text-primary,inherit);font-size:14px}
 .app-banner .ab-text{flex:1;min-width:0}
 .app-banner .ab-title{font-weight:600}
-.app-banner .ab-cert{font-size:11px;color:var(--color-text-secondary,#666);word-break:break-all;font-family:monospace}
+.app-banner .ab-check{font-size:12px;color:var(--color-primary,#3390ec)}
+.cert-dlg{border:0;border-radius:16px;padding:20px;max-width:min(92vw,380px);background:var(--color-surface-container,#fff);color:inherit}
+.cert-dlg::backdrop{background:rgba(0,0,0,.4)}
+.cert-dlg .cd-title{font-weight:600;margin-bottom:10px}
+.cert-dlg .cd-row{display:flex;gap:8px;align-items:flex-start}
+.cert-dlg .cd-val{flex:1;font-family:monospace;font-size:13px;word-break:break-all;white-space:pre-wrap}
+.cert-dlg .cd-copy{background:none;border:0;cursor:pointer;color:inherit;padding:4px}
+.cert-dlg .cd-rel{display:block;margin-top:12px;color:var(--color-primary,#3390ec)}
+.cert-dlg .cd-close{margin-top:14px;float:right;background:none;border:0;color:var(--color-primary,#3390ec);font-weight:600;cursor:pointer}
 .app-banner .ab-go{padding:6px 14px;border-radius:16px;background:var(--color-primary,#3390ec);color:#fff;text-decoration:none;font-weight:600}
 .app-banner .ab-x{background:none;border:0;padding:4px;cursor:pointer;color:inherit;display:flex}
+.cert-dlg .cd-toast{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:#323232;color:#fff;padding:6px 14px;border-radius:16px;font-size:13px}
+.cert-dlg{position:fixed}

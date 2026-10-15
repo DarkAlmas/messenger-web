@@ -16,8 +16,11 @@
     const tx = document.createElement('div'); tx.className = 'ab-text';
     const t1 = document.createElement('div'); t1.className = 'ab-title'; t1.textContent = 'Установить приложение' + (ver ? ' ' + ver : '');
     tx.append(t1);
-    if (typeof v.certSha256 === 'string' && /^[0-9A-Fa-f:]{64,95}$/.test(v.certSha256.trim())) {
-      const c = document.createElement('div'); c.className = 'ab-cert'; c.textContent = 'SHA-256 сертификата подписи: ' + v.certSha256.trim(); tx.append(c);
+    const cert = typeof v.certSha256 === 'string' && /^[0-9A-Fa-f:]{64,95}$/.test(v.certSha256.trim()) ? v.certSha256.trim() : null;
+    const rel = url ? url.replace(/\/releases\/download\/([^/]+)\/.*$/, '/releases/tag/$1') : null;
+    if (cert) {
+      const l = document.createElement('a'); l.href = '#'; l.className = 'ab-check'; l.textContent = 'Проверка подписи';
+      l.onclick = ev => { ev.preventDefault(); certDialog(cert, rel); }; tx.append(l);
     }
     b.append(ic, tx);
     if (url) { const a = document.createElement('a'); a.className = 'ab-go'; a.href = url; a.rel = 'noopener noreferrer'; a.textContent = 'Скачать'; b.append(a); }
@@ -27,4 +30,26 @@
     b.append(x);
     document.body.prepend(b);
   }).catch(() => { /* нет файла / сети — баннера нет */ });
+  function certDialog(cert, rel) {
+    let d = document.getElementById('certDlg');
+    if (!d) { d = document.createElement('dialog'); d.id = 'certDlg'; d.className = 'cert-dlg'; document.body.append(d); }
+    d.textContent = '';
+    const h = document.createElement('div'); h.className = 'cd-title'; h.textContent = 'SHA-256 сертификата подписи';
+    const row = document.createElement('div'); row.className = 'cd-row';
+    const code = document.createElement('code'); code.className = 'cd-val'; code.textContent = cert;
+    const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'cd-copy'; cp.setAttribute('aria-label', 'Копировать');
+    const ci = document.createElement('span'); ci.className = 'ms'; ci.setAttribute('aria-hidden', 'true'); ci.textContent = 'content_copy'; cp.append(ci);
+    cp.onclick = async () => {
+      try { await navigator.clipboard.writeText(cert); }
+      catch (e) { const r = document.createRange(); r.selectNodeContents(code); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); document.execCommand('copy'); sel.removeAllRanges(); }
+      // тост внутри диалога: обычный #toast оказался бы под модальным окном (top layer)
+      let t = d.querySelector('.cd-toast'); if (!t) { t = document.createElement('div'); t.className = 'cd-toast'; t.setAttribute('role', 'status'); d.append(t); }
+      t.textContent = 'Скопировано'; t.hidden = false; clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, 2000);
+    };
+    row.append(code, cp); d.append(h, row);
+    if (rel) { const a = document.createElement('a'); a.className = 'cd-rel'; a.href = rel; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'Страница релиза'; d.append(a); }
+    const c = document.createElement('button'); c.type = 'button'; c.className = 'cd-close'; c.textContent = 'Закрыть'; c.onclick = () => d.close(); d.append(c);
+    d.onclick = ev => { if (ev.target === d) d.close(); };
+    d.showModal();
+  }
 })();
