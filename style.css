@@ -238,7 +238,7 @@ button{border-radius:var(--radius-button)}
 .msg.mine .react.mine{border-color:rgba(255,255,255,.5)}
 #buildInfo{text-align:center;margin-top:12px;user-select:all}
 /* Material Symbols Rounded (Google, Apache 2.0), самохостинг: подмножество нужных значков */
-@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2?v=6) format('woff2')}
+@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2?v=7) format('woff2')}
 .ms,.settings-row__icon{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:'liga';-webkit-font-smoothing:antialiased;user-select:none;overflow:hidden;flex:none}
 .ms.s{font-size:16px;vertical-align:-3px}
 .ava.ms{font-family:'Material Symbols Rounded';font-weight:normal;font-size:24px}
@@ -388,3 +388,11 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .sys-row .sys-ic{font-size:16px}
 .sys-row .link{font-size:13px;padding:0}
 .peer-safety{margin-top:8px}
+.idmm{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;background:var(--panel);padding:24px}
+.idmm-card{max-width:420px;width:100%;text-align:center;display:flex;flex-direction:column;align-items:center;gap:12px}
+.idmm .idmm-ic{font-size:72px;color:var(--danger)}
+.idmm h2{margin:4px 0 0;font-size:20px;color:var(--text)}
+.idmm-text{margin:0;color:var(--muted);font-size:15px}
+.idmm #idmmGo{width:100%;margin-top:8px}
+.idmm-info{text-align:left;width:100%;margin:0;padding:10px 12px;background:var(--panel2);color:var(--muted);border-radius:8px;font-size:12px;white-space:pre-wrap;word-break:break-all;user-select:text}
+.idmm-box{width:100%;display:flex;flex-direction:column;align-items:flex-end;gap:4px}

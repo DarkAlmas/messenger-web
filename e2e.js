@@ -94,9 +94,20 @@ function sessionId(jwt) { const p = jwt.split('.')[1].replace(/-/g, '+').replace
 async function token() { const { data } = await sb.auth.getSession(); if (!data.session) throw new Error('нет сессии'); return data.session; }
 const chk = ({ data, error }) => { if (error) throw error; return data; };
 export const deviceId = () => kv.dev || null;
+/** Выход из состояния IdentityMismatch: серверную строку не трогаем (ни перезаписи, ни удаления — это улика возможной подмены),
+ *  только помечаем, что при следующем входе rebind в эту строку запрещён: устройство проходит обычную регистрацию с новым session_id.
+ *  Доверие, расшифрованная история (pt:/pts:/ptg:) и резервная копия остаются (keep в ensureReadyFor). */
+export async function resetForRelogin() {
+  if (!db) return;
+  return locked(async () => { await put('norebind', '1'); });
+}
 
 export function init(client) { sb = client; }
 export class KeysLost extends Error {}
+/** На сервере у строки этого устройства другой identity-ключ, чем в браузере: отправка остановлена, нужен повторный вход. */
+export class IdentityMismatch extends KeysLost {
+  constructor(dev, localFp, serverFp) { super('ключи этого устройства не совпадают с сервером'); this.name = 'IdentityMismatch'; this.code = 'E2E_IDENTITY_MISMATCH'; this.deviceId = dev || null; this.localFp = localFp || null; this.serverFp = serverFp || null; this.userMsg = 'Ключи этого устройства не совпадают с сервером. Отправка остановлена — войдите заново.'; }
+}
 const keysLost = why => { const e = new KeysLost('Ключи шифрования этого устройства не загрузились (' + why + '). Новые ключи НЕ создаются автоматически, чтобы не сломать переписку. Обновите страницу; если не поможет — выйдите и войдите снова.'); e.userMsg = e.message; return e; };
 
 /** Ключи для текущей сессии (session_id = device_id), публикация, пополнение одноразовых prekey. */
@@ -122,7 +133,7 @@ function ensureReadyFor(sid) {
     if (kv.dev === dev && kv.uid === uid && !kv.state) throw keysLost('локальное хранилище ключей повреждено (нет состояния)');
     // Новая сессия того же пользователя, локальные ключи целы: переносим строку ключей старого устройства на новую сессию
     // (rpc rebind_device) ДО публикации новых ключей — собеседники не увидят «ключ изменился». Не вышло — обычная регистрация.
-    if (kv.dev && kv.dev !== dev && kv.uid === uid && kv.state && kv.dsec) {
+    if (kv.dev && kv.dev !== dev && kv.uid === uid && kv.state && kv.dsec && kv.norebind !== '1') {
       const { data: has, error: he } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
       if (!he && !has) {
         const adopt = async nd => {
@@ -224,13 +235,24 @@ export async function checkDevice() {
   });
 }
 
+/** Отпечаток ПУБЛИЧНОГО identity-ключа: SHA-256, первые 16 байт hex группами по 4. Приватных частей не касается. */
+async function pubFp(b64) {
+  try { const raw = Uint8Array.from(atob(String(b64).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', raw)); return [...h.slice(0, 16)].map(x => x.toString(16).padStart(2, '0')).join('').match(/.{4}/g).join(' '); }
+  catch { return '(не прочитан)'; }
+}
 const identityPub = st => JSON.parse(st.publicRow()).identity_pub;
 /** Строка devices_keys этой сессии уже есть на сервере (повторная публикация, прошлый запуск). Строку НЕ удаляем: вместе с ней
  *  пропадал rebind_hash (87b07d4) — следующий rebind не проходил, а через час чистка удаляла ключи устройства. identity не меняем никогда:
  *  тот же identity — обновляем подписанный/Kyber prekey и заменяем одноразовые ключи через replace_prekeys; другой identity — ошибка. */
 async function replaceDeviceKeys(dev, row) {
   const cur = chk(await sb.from('devices_keys').select('identity_pub').eq('device_id', dev).maybeSingle());
-  if (!cur || cur.identity_pub !== row.identity_pub) throw keysLost('на сервере для этого устройства другой ключ личности');
+  if (!cur || cur.identity_pub !== row.identity_pub) {
+    // Возможна подмена строки на сервере: свою строку НЕ перезаписываем и серверный ключ локально НЕ принимаем.
+    const lf = await pubFp(row.identity_pub), sf = cur ? await pubFp(cur.identity_pub) : '(нет строки)';
+    console.error('E2E_IDENTITY_MISMATCH device_id=' + dev + ' local_identity_fp=' + lf + ' server_identity_fp=' + sf);
+    await put('idmm', dev); throw new IdentityMismatch(dev, lf, sf);
+  }
   const upd = { ...row }; delete upd.identity_pub; delete upd.device_id; delete upd.user_id;
   chk(await sb.from('devices_keys').update(upd).eq('device_id', dev));
   await put('otk_full', '1'); // следующий topUp заменяет полный набор одноразовых ключей (replace_prekeys)

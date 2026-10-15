@@ -404,7 +404,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zr').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zs').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -418,16 +418,36 @@ async function deviceCheck(force) {
   if (error) return; // нет сети — проверим позже
   if (!(await e2eStart())) return;
   try { await E2E.checkDevice(); }
-  catch (e) { showErr('Не удалось проверить ключи шифрования этого устройства: ' + ruErr(e)); }
+  catch (e) { if (e && e.name === 'IdentityMismatch') { e2eErr = e; showIdMismatch(e); } else showErr('Не удалось проверить ключи шифрования этого устройства: ' + ruErr(e)); }
 }
 setInterval(() => deviceCheck(true), 10 * 60 * 1000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') deviceCheck(false); });
 window.addEventListener('focus', () => deviceCheck(false));
 let e2eBusyAt = 0;
+/** Экран «Ключи этого устройства не совпадают с сервером» (Design Bot). Без секретов: только код ошибки и id устройства. */
+function showIdMismatch(e) {
+  if (document.getElementById('idmm')) return;
+  const el = document.createElement('div'); el.id = 'idmm'; el.className = 'idmm'; el.setAttribute('role', 'alertdialog'); el.setAttribute('aria-labelledby', 'idmmTitle');
+  el.innerHTML = '<div class="idmm-card"><span class="ms idmm-ic" aria-hidden="true">gpp_bad</span><h2 id="idmmTitle">Ключи этого устройства не совпадают с сервером</h2>'
+    + '<p class="idmm-text">Чтобы защитить переписку, отправка остановлена. Войдите заново.</p>'
+    + '<button type="button" id="idmmGo">Выйти и войти заново</button><button type="button" id="idmmMore" class="link" aria-expanded="false">Подробнее</button>'
+    + '<div id="idmmBox" class="idmm-box" hidden><pre id="idmmInfo" class="idmm-info"></pre><button type="button" id="idmmCopy" class="link"><span class="ms s" aria-hidden="true">content_copy</span> Копировать</button></div></div>';
+  document.body.append(el);
+  txt($('idmmInfo'), 'Код ошибки: ' + ((e && e.code) || 'E2E_IDENTITY_MISMATCH') + '\nУстройство: ' + ((e && e.deviceId) || (E2E && E2E.deviceId()) || '—') + '\nОтпечаток ключа в браузере: ' + ((e && e.localFp) || '—') + '\nОтпечаток ключа на сервере: ' + ((e && e.serverFp) || '—') + '\nСборка: ' + ((window.BUILD && window.BUILD.commit) || '—'));
+  $('idmmCopy').onclick = () => navigator.clipboard.writeText($('idmmInfo').textContent).then(() => toast('Скопировано'), () => toast('Не удалось скопировать'));
+  $('idmmMore').onclick = () => { const i = $('idmmBox'); i.hidden = !i.hidden; $('idmmMore').setAttribute('aria-expanded', String(!i.hidden)); };
+  $('idmmGo').onclick = async () => {
+    $('idmmGo').disabled = true;
+    try { if (E2E && E2E.resetForRelogin) await E2E.resetForRelogin(); } catch (err) { console.warn('resetForRelogin', err); }
+    userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (err) { /* локальную сессию всё равно чистим */ }
+    el.remove();
+  };
+  $('idmmGo').focus();
+}
 async function e2eStart() {
   if (e2eErr && e2eErr.name === 'LockBusy' && Date.now() - e2eBusyAt < 15000) return false;
   try { const m = await e2eMod; await m.ensureReady(); e2eErr = null; }
-  catch (e) { e2eErr = e; if (e && e.name === 'LockBusy') { e2eBusyAt = Date.now(); retryBusySoon(); } console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
+  catch (e) { e2eErr = e; if (e && e.name === 'IdentityMismatch') { showIdMismatch(e); return false; } if (e && e.name === 'LockBusy') { e2eBusyAt = Date.now(); retryBusySoon(); } console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
   return E2E && !e2eErr;
 }
 const sentOwn = {}; // подпись шифротекста → открытый текст (своё сообщение приходит по Realtime раньше, чем сохранится копия)
