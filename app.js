@@ -101,12 +101,14 @@ setInterval(async () => {
   if (!$('authMsg').textContent.startsWith(NET_ERR) && !$('qrStatus').textContent.startsWith('Нет соединения')) return;
   try { const r = await fetch(`${C.SUPABASE_URL}/auth/v1/health`, { headers: { apikey: C.SUPABASE_KEY }, cache: 'no-store' }); if (r.status < 500) netBack(); } catch (e) { /* всё ещё нет сети */ }
 }, 5000);
-// Текст подтверждения выхода. Вариант про «30 дней» (LOGOUT_CONFIRM_30D) включить, только когда Hack Bot подтвердит, что сервер хранит ключи 30 дней.
+// Текст подтверждения выхода
 const LOGOUT_CONFIRM_30D = 'Выйти из аккаунта? Ключи на этом устройстве сохранятся 30 дней, за это время можно войти снова без потери переписки.';
-const LOGOUT_CONFIRM = 'Выйти из аккаунта на этом устройстве? Ключи шифрования этого браузера будут удалены, и переписка здесь станет нечитаемой, если у вас нет резервной копии.';
+const LOGOUT_CONFIRM = LOGOUT_CONFIRM_30D; // подтверждено Hack Bot: ключи с секретом устройства хранятся 30 дней
 $('logout').onclick = async () => {
   if (!(await askConfirm(LOGOUT_CONFIRM, 'Выйти'))) return;
-  await doLogout(); };
+  // Ключи остаются (локально и на сервере, 30 дней) — при следующем входе rebind_device вернёт это устройство
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* локальную сессию всё равно чистим */ } };
+/** Сеанс этого устройства отозван (revoke_device удаляет ключи сразу): стираем локальные ключи и выходим */
 async function doLogout() {
   try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
   try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } }
@@ -387,7 +389,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261014k').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015s').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -396,7 +398,7 @@ async function deviceCheck(force) {
   const { error } = await sb.auth.getUser();
   if (error && (error.status === 401 || error.status === 403 || /session|jwt|not found/i.test(error.message))) {
     showErr('Сессия на этом устройстве завершена (вход отозван или истёк). Войдите снова.');
-    try { if (E2E) await E2E.wipe(); } catch (e) { /* всё равно выходим */ }
+    // Ключи не стираем: если сеанс просто истёк, сервер хранит их 30 дней и при входе rebind_device вернёт устройство
     await sb.auth.signOut({ scope: 'local' }).catch(() => {});
     return;
   }

@@ -10,7 +10,16 @@ let rebindFail = false;
 /** Был ли при этом входе неудачный перенос ключей (тогда переписку можно вернуть из резервной копии) */
 export const rebindFailed = () => rebindFail;
 /** Аргументы rebind_device. Сюда же добавится подпись серверного challenge старым identity-ключом, когда сервер её потребует. */
-async function rebindArgs(oldDev) { return { p_old_device: oldDev }; }
+async function rebindArgs(oldDev) { return { p_old_device: oldDev, p_secret: kv.dsec }; }
+/** Секрет устройства (32 случайных байта, base64url без '='): хранится только рядом с ключами и уходит только в set_device_secret/rebind_device. Не логировать. */
+function newSecret() { const b = crypto.getRandomValues(new Uint8Array(32)); let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+async function ensureSecret() {
+  if (kv.dsec && kv.dsec_set === '1') return;
+  if (!kv.dsec) await put('dsec', newSecret());
+  const { error } = await sb.rpc('set_device_secret', { p_secret: kv.dsec });
+  if (error) { console.warn('set_device_secret: ошибка', error.code || error.message); return; } // повторим при следующей загрузке
+  await put('dsec_set', '1');
+}
 export class KeyChange extends Error { constructor(u) { super('Ключ безопасности собеседника изменился'); this.userId = u; } }
 export class NoKey extends Error {}
 
@@ -72,12 +81,12 @@ export function ensureReady() {
     if (kv.dev === dev && kv.uid === uid && !kv.state) throw keysLost('локальное хранилище ключей повреждено (нет состояния)');
     // Новая сессия того же пользователя, локальные ключи целы: переносим строку ключей старого устройства на новую сессию
     // (rpc rebind_device) ДО публикации новых ключей — собеседники не увидят «ключ изменился». Не вышло — обычная регистрация.
-    if (kv.dev && kv.dev !== dev && kv.uid === uid && kv.state) {
+    if (kv.dev && kv.dev !== dev && kv.uid === uid && kv.state && kv.dsec) {
       const { data: has, error: he } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
       if (!he && !has) {
         try {
           const { data: nd, error: re } = await sb.rpc('rebind_device', await rebindArgs(kv.dev));
-          if (re) throw re;
+          if (re) throw new Error(/rebind denied/i.test(re.message || '') ? 'rebind denied' : 'rebind_device: ' + (re.code || 'ошибка'));
           if (!nd) throw new Error('rebind_device вернул пустой id');
           const cand = Store.load(kv.state); // проверяем, что состояние читается, до смены id
           const old = jlist('olddevs'); if (!old.includes(kv.dev)) old.push(kv.dev);
@@ -86,7 +95,7 @@ export function ensureReady() {
           for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп раздать новому id
           await topUp();
           return kv.dev;
-        } catch (err) { console.warn('rebind_device не удался, регистрируем новое устройство', err); rebindFail = true; }
+        } catch (err) { console.warn('rebind_device не удался, регистрируем новое устройство:', err && err.message); rebindFail = true; }
       }
     }
     if (kv.dev !== dev || kv.uid !== uid) {
@@ -106,6 +115,7 @@ export function ensureReady() {
       try { store = Store.load(kv.state); } catch (err) { console.error(err); throw keysLost('не удалось прочитать сохранённые ключи'); }
     }
     await publish(dev);
+    await ensureSecret();
     await topUp();
     return dev;
   }).catch(e => { ready = null; throw e; });
