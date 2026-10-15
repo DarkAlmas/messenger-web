@@ -1137,7 +1137,7 @@ async function chatPeer(chat) {
 }
 async function sendPayload(chat, pt, extra) {
   if (!(await e2eStart())) throw userErr('Сообщение не отправлено: шифрование на этом устройстве не запустилось (' + ruErr(e2eErr) + '). Обновите страницу (Ctrl+F5).');
-  try { await E2E.checkDevice(); } catch (e) { throw userErr('Сообщение не отправлено: не удалось зарегистрировать ключи этого устройства (' + ruErr(e) + ').'); }
+  try { await E2E.checkDevice(); } catch (e) { console.error('checkDevice', e); throw userErr('Нет связи с сервером. Сообщение не отправлено, нажмите «Повторить».'); }
   if (chat.kind === 'direct') {
     const peer = await chatPeer(chat);
     if (!peer) throw userErr('Сообщение не отправлено: не удалось определить собеседника.');
