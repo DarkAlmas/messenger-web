@@ -88,7 +88,7 @@ nkGo.onclick = async () => {
     nk.show(r === 'rate' ? 'wait' : 'bad', r === 'rate' ? MSG.rate : (MSG[r] || MSG.invalid));
   } catch (e) { nk.show('bad', ruErr(e)); nkGo.disabled = false; }
 };
-$('nickLogout').onclick = async () => { nkDlg.close(); try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* */ } };
+$('nickLogout').onclick = async () => { nkDlg.close(); userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* */ } };
 let checkedUid = null;
 async function checkChosen(s) {
   if (!s) { checkedUid = null; if (nkDlg.open) nkDlg.close(); return; }

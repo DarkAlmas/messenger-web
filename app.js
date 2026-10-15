@@ -107,11 +107,11 @@ const LOGOUT_CONFIRM = LOGOUT_CONFIRM_30D; // подтверждено Hack Bot:
 $('logout').onclick = async () => {
   if (!(await askConfirm(LOGOUT_CONFIRM, 'Выйти'))) return;
   // Ключи остаются (локально и на сервере, 30 дней) — при следующем входе rebind_device вернёт это устройство
-  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* локальную сессию всё равно чистим */ } };
+  userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* локальную сессию всё равно чистим */ } };
 /** Сеанс этого устройства отозван (revoke_device удаляет ключи сразу): стираем локальные ключи и выходим */
 async function doLogout() {
   try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
-  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } }
+  userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } }
 
 // ---------- вход по QR ----------
 const QR_TEXT = 'Откройте приложение на телефоне: меню ⋮ → «Войти на сайте (QR)» и отсканируйте код. Входите только если сами только что открыли этот QR.';
@@ -397,10 +397,8 @@ async function deviceCheck(force) {
   devCheckAt = Date.now();
   const { error } = await sb.auth.getUser();
   if (error && (error.status === 401 || error.status === 403 || /session|jwt|not found/i.test(error.message))) {
-    showErr('Сессия на этом устройстве завершена (вход отозван или истёк). Войдите снова.');
     // Ключи не стираем: если сеанс просто истёк, сервер хранит их 30 дней и при входе rebind_device вернёт устройство
-    await sb.auth.signOut({ scope: 'local' }).catch(() => {});
-    return;
+    await sessionEnded(error); return;
   }
   if (error) return; // нет сети — проверим позже
   if (!(await e2eStart())) return;
@@ -1426,17 +1424,26 @@ let sessionGone = false, rtRecovering = null;
 function rtRecover() {
   if (sessionGone) return Promise.resolve(false);
   if (!rtRecovering) rtRecovering = sb.auth.refreshSession()
-    .then(({ data, error }) => { const t = data && data.session && data.session.access_token; if (error || !t) { sessionEnded(); return false; } return rtAuth(t).then(() => true); })
-    .catch(() => { sessionEnded(); return false; })
+    .then(({ data, error }) => { const t = data && data.session && data.session.access_token; if (error && isNetErr(error)) return false; if (error || !t) { sessionEnded(error); return false; } return rtAuth(t).then(() => true); })
+    .catch(e => { if (!isNetErr(e)) sessionEnded(e); return false; })
     .finally(() => { setTimeout(() => { rtRecovering = null; }, 10000); });
   return rtRecovering;
 }
-async function sessionEnded() {
-  if (sessionGone) return; sessionGone = true;
+const isNetErr = e => !!e && (e.name === 'AuthRetryableFetchError' || e.status === 0 || /fetch|network/i.test(e.message || ''));
+// Баннер на экране входа: сеанс удалён на сервере (с другого устройства) или просто истёк. Выход пользователем — без баннера.
+let userSignOut = false;
+function endedBanner(err) {
+  const code = err && (err.code || ''), m = (err && err.message) || '';
+  const remote = /session_not_found|refresh_token_not_found/.test(code) || /session.*not found|refresh token not found/i.test(m);
+  txt($('endedText'), remote ? 'Сеанс завершён с другого устройства. Войдите снова.' : 'Сеанс истёк. Войдите снова.');
+  $('endedBanner').hidden = false;
+}
+async function sessionEnded(err) {
+  if (sessionGone) return; sessionGone = true; endedBanner(err);
   try { sb.removeAllChannels(); } catch (e) { /* */ } chan = null; profChan = null; inboxChan = null;
   // ключи не трогаем (правило 30 дней: rebind_device вернёт устройство при следующем входе)
   try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* */ }
-  onSession(null); $('endedBanner').hidden = false;
+  onSession(null);
 }
 async function rtAuth(token) {
   try { if (!token) { const { data } = await sb.auth.getSession(); token = data.session && data.session.access_token; } if (token) await sb.realtime.setAuth(token); }
@@ -1444,7 +1451,8 @@ async function rtAuth(token) {
 }
 sb.auth.onAuthStateChange((e, s) => {
   if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token);
-  if (e === 'SIGNED_OUT') { sb.removeAllChannels(); chan = null; profChan = null; inboxChan = null; }
+  if (e === 'SIGNED_OUT' && !userSignOut && !sessionGone && me) { sessionGone = true; endedBanner(null); } // SIGNED_OUT от автообновления токена
+  if (e === 'SIGNED_OUT') { userSignOut = false; sb.removeAllChannels(); chan = null; profChan = null; inboxChan = null; }
   if (e === 'SIGNED_IN') { sessionGone = false; $('endedBanner').hidden = true; }
   onSession(s);
 });
