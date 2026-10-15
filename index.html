@@ -38,8 +38,8 @@
         <input id="username" pattern="[a-z0-9_]{3,32}" hidden>
         <p id="userHint" class="hint small" hidden>3–32 символа: латинские буквы a-z, цифры 0-9 и _</p>
         <button type="submit" id="loginBtn">Войти</button>
-        <div class="or-sep"><span>или</span></div>
-        <button type="button" id="googleBtn" class="gsi"><img src="img/google-g.svg" alt="" width="18" height="18"><span>Войти через Google</span></button>
+        <div class="or-sep" id="googleSep" hidden><span>или</span></div>
+        <button type="button" id="googleBtn" class="gsi" hidden><img src="img/google-g.svg" alt="" width="18" height="18"><span>Войти через Google</span></button>
         <button type="button" id="toggleReg" class="link">Нет аккаунта? Регистрация</button>
         <p id="authMsg" class="hint"></p>
       </form>
@@ -197,6 +197,6 @@
 <script src="backup.js?v=1"></script>
 <script src="config.js?v=20261015b"></script>
 <script src="app.js?v=20261015w"></script>
-<script src="account.js?v=3"></script>
+<script src="account.js?v=4"></script>
 </body>
 </html>

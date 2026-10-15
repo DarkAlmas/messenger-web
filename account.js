@@ -11,14 +11,18 @@ async function googleEnabled() {
   try { const r = await fetch(`${C.SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: C.SUPABASE_KEY } }); const j = await r.json(); return !!(j.external && j.external.google); }
   catch (e) { return null; }
 }
+// Кнопка и «или» скрыты, пока сервер не скажет external.google === true (включится сама, когда провайдер включат)
+function showGoogle(on) { gBtn.hidden = !on; $('googleSep').hidden = !on; }
+(async () => {
+  try { if (sessionStorage.getItem('msgr-google') === '1') showGoogle(true); } catch (e) { /* */ }
+  const en = await googleEnabled();
+  if (en === null) return; // ошибка сети — оставляем как есть (по умолчанию скрыто)
+  showGoogle(en); try { sessionStorage.setItem('msgr-google', en ? '1' : '0'); } catch (e) { /* */ }
+})();
 gBtn.onclick = async () => {
   gBtn.disabled = true; gBtn.classList.add('busy');
-  const done = () => { gBtn.disabled = false; gBtn.classList.remove('busy'); };
-  const en = await googleEnabled();
-  if (en === false) { done(); return toast('Google-вход пока не включён', 3000); }
-  if (en === null) { done(); return toast('Нет соединения с сервером', 3000); }
   const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: REDIRECT } });
-  if (error) { done(); toast(/not enabled|unsupported provider/i.test(error.message) ? 'Google-вход пока не включён' : 'Не удалось войти через Google: ' + ruErr(error), 3000); }
+  if (error) { gBtn.disabled = false; gBtn.classList.remove('busy'); toast('Не удалось войти через Google: ' + ruErr(error), 3000); }
 };
 
 // ---------- возврат после Google (PKCE ?code= или implicit #access_token=) ----------
@@ -27,7 +31,7 @@ gBtn.onclick = async () => {
   const err = q.get('error_description') || h.get('error_description') || q.get('error') || h.get('error');
   const clean = () => history.replaceState(null, '', location.pathname);
   try {
-    if (err) { clean(); toast(/not enabled|unsupported provider/i.test(err) ? 'Google-вход пока не включён' : 'Вход через Google не удался: ' + err, 4000); return; }
+    if (err) { clean(); toast('Вход через Google не удался: ' + err, 4000); return; }
     if (q.get('code')) { const c = q.get('code'); clean(); const { error } = await sb.auth.exchangeCodeForSession(c); if (error) throw error; }
     else if (h.get('access_token') && h.get('refresh_token')) { const at = h.get('access_token'), rt = h.get('refresh_token'); clean(); const { error } = await sb.auth.setSession({ access_token: at, refresh_token: rt }); if (error) throw error; }
   } catch (e) { toast('Вход через Google не удался: ' + ruErr(e), 4000); }
