@@ -8,10 +8,10 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: blob: https://tbbaztmtkcrzxnkkmtqv.supabase.co; connect-src 'self' https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; font-src 'self'; base-uri 'none'; form-action 'none';">
 <title>Мессенджер</title>
 <link rel="icon" href="data:,">
-<link rel="preload" href="fonts/material-symbols-rounded.woff2?v=2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/material-symbols-rounded.woff2?v=3" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="tokens.css?v=20261015b">
 <script src="theme.js?v=20261015b"></script>
-<link rel="stylesheet" href="style.css?v=20261015m">
+<link rel="stylesheet" href="style.css?v=20261015n">
 </head>
 <body>
 <div id="notice" role="alert" hidden><span id="noticeText"></span><button type="button" id="noticeClose" aria-label="Закрыть"><span class="ms" aria-hidden="true">close</span></button></div>
@@ -136,6 +136,7 @@
           <div class="settings-group__title">Данные</div>
           <button type="button" class="settings-row" id="rowEmail"><span class="settings-row__icon" aria-hidden="true">mail</span><span class="settings-row__label">Почта</span><span class="settings-row__value" id="setEmail"></span></button>
           <button type="button" class="settings-row" id="rowStorage"><span class="settings-row__icon" aria-hidden="true">storage</span><span class="settings-row__label">Хранилище</span><span class="settings-row__value" id="storeVal"></span></button>
+          <button type="button" class="settings-row" id="rowBackup"><span class="settings-row__icon" aria-hidden="true">backup</span><span class="settings-row__label">Резервная копия<small id="backupSub">…</small></span></button>
           <button type="button" class="settings-row" id="rowLang"><span class="settings-row__icon" aria-hidden="true">language</span><span class="settings-row__label">Язык</span><span class="settings-row__value">Русский</span></button>
         </div>
         <div class="settings-group">
@@ -187,7 +188,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script src="build.js?v=f975ff4"></script>
+<script src="vendor/hash-wasm/argon2.umd.min.js?v=4.12.0"></script>
+<script src="backup.js?v=1"></script>
 <script src="config.js?v=20261015b"></script>
-<script src="app.js?v=20261015q"></script>
+<script src="app.js?v=20261015r"></script>
 </body>
 </html>

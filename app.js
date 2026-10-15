@@ -101,8 +101,11 @@ setInterval(async () => {
   if (!$('authMsg').textContent.startsWith(NET_ERR) && !$('qrStatus').textContent.startsWith('Нет соединения')) return;
   try { const r = await fetch(`${C.SUPABASE_URL}/auth/v1/health`, { headers: { apikey: C.SUPABASE_KEY }, cache: 'no-store' }); if (r.status < 500) netBack(); } catch (e) { /* всё ещё нет сети */ }
 }, 5000);
+// Текст подтверждения выхода. Вариант про «30 дней» (LOGOUT_CONFIRM_30D) включить, только когда Hack Bot подтвердит, что сервер хранит ключи 30 дней.
+const LOGOUT_CONFIRM_30D = 'Выйти из аккаунта? Ключи на этом устройстве сохранятся 30 дней, за это время можно войти снова без потери переписки.';
+const LOGOUT_CONFIRM = 'Выйти из аккаунта на этом устройстве? Ключи шифрования этого браузера будут удалены, и переписка здесь станет нечитаемой, если у вас нет резервной копии.';
 $('logout').onclick = async () => {
-  if (!confirm('Выйти на этом устройстве?\n\nКлючи шифрования этого браузера будут удалены. Вся зашифрованная переписка, которую вы видите здесь (включая ваши отправленные сообщения), после выхода станет нечитаемой на этом устройстве — восстановить её нельзя. Сообщения останутся читаемыми на других ваших устройствах.')) return;
+  if (!(await askConfirm(LOGOUT_CONFIRM, 'Выйти'))) return;
   await doLogout(); };
 async function doLogout() {
   try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
@@ -1248,7 +1251,7 @@ function openSession(d, removed) {
   const btn = el('button', 'settings-row settings-row--color-danger', null); btn.type = 'button';
   const bi = el('span', 'settings-row__icon', 'logout'); bi.setAttribute('aria-hidden', 'true'); btn.append(bi, el('span', 'settings-row__label', 'Завершить сеанс'));
   btn.onclick = async () => {
-    if (!(await askConfirm('Завершить сеанс на этом устройстве? Его ключи будут удалены.', 'Завершить'))) return;
+    if (!(await askConfirm('Завершить сеанс на этом устройстве? Его ключи будут удалены. Восстановить их будет нельзя.', 'Завершить'))) return;
     btn.disabled = true;
     try {
       await revokeSession(d); dlg.close();
@@ -1274,7 +1277,7 @@ $('rowDevices').onclick = async () => {
     for (const d of others) list.append(devRow(d, paint));
     all.onclick = async () => {
       const left = (myDevs || []).filter(x => !x.is_current);
-      if (!(await askConfirm(`Завершить все другие сеансы (${left.length})? Их ключи будут удалены.`, 'Завершить'))) return;
+      if (!(await askConfirm(`Завершить все другие сеансы (${left.length})? Их ключи будут удалены. Восстановить их будет нельзя.`, 'Завершить'))) return;
       all.disabled = true; let fail = 0;
       for (const d of left) { try { await revokeSession(d); } catch (e) { fail++; console.warn('revoke', e); } }
       all.disabled = false;
@@ -1406,7 +1409,8 @@ async function onSession(session) {
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
     { const m = /^#(profile|settings)$/.exec(location.hash); if (m) openSettings(false, m[1]); else setNav('chats'); }
-    e2eStart().then(() => deviceCheck(true));
+    e2eStart().then(ok => { deviceCheck(true); if (ok && E2E.rebindFailed && E2E.rebindFailed()) offerRestore(); });
+    paintBackupRow();
     loadChats();
   } else { currentChat = null; $('app').classList.remove('in-chat', 'in-settings'); qrFails = 0; startQr(); }
 }
@@ -1428,3 +1432,99 @@ document.addEventListener('visibilitychange', async () => {
   } catch (e) { console.warn('refresh on visible', e); }
 });
 sb.auth.getSession().then(({ data }) => onSession(data.session));
+
+// ---------- резервная копия переписки (docs/backup_format.md, общий формат с Android) ----------
+const BK_MIN = 12; // как в docs/backup_format.md (общий с приложением)
+let bkRow; // строка key_backups или null
+async function getBackupRow() { const { data, error } = await sb.from('key_backups').select('*').eq('user_id', me.id).maybeSingle(); if (error) throw error; bkRow = data; return data; }
+async function paintBackupRow() {
+  try { const r = await getBackupRow(); txt($('backupSub'), r ? fmtDT(r.updated_at) + ' · ' + fmtSize(r.size_bytes) : 'не создана'); }
+  catch { txt($('backupSub'), 'не удалось загрузить'); }
+}
+function passInput(ph) { const i = el('input'); i.type = 'password'; i.placeholder = ph; i.autocomplete = 'new-password'; i.minLength = BK_MIN; return i; }
+async function collectMessages(progress) {
+  const out = [];
+  const chats = lastChats.slice();
+  for (let ci = 0; ci < chats.length; ci++) {
+    let before = null;
+    for (;;) {
+      let q = sb.from('messages').select('*').eq('chat_id', chats[ci].id).order('created_at', { ascending: false }).limit(500);
+      if (before) q = q.lt('created_at', before);
+      const { data, error } = await q; if (error) throw error;
+      if (!data || !data.length) break;
+      for (const m of data) {
+        if (!m.ciphertext) continue;
+        const pl = await decryptPayload(m);
+        if (pl && !pl.fail && !pl.other) out.push(Backup.toEntry(m, pl));
+      }
+      before = data[data.length - 1].created_at;
+      progress(`Чат ${ci + 1} из ${chats.length} · сообщений: ${out.length}`);
+      if (data.length < 500) break;
+    }
+  }
+  return out;
+}
+async function createBackup(pass, progress) {
+  if (!(await e2eStart())) throw userErr('Шифрование не запущено');
+  const row = await getBackupRow();
+  const salt = row ? row.salt : Backup.newSalt(), kdf = row && row.kdf && row.kdf.alg === 'argon2id' ? row.kdf : Backup.DEFAULT_KDF;
+  progress('Собираем сообщения…');
+  const messages = await collectMessages(progress);
+  progress('Шифруем копию…');
+  const key = await Backup.deriveKey(pass, salt, kdf);
+  const bin = await Backup.seal({ v: 1, uid: me.id, created_at: new Date().toISOString(), messages }, key, me.id);
+  if (bin.length > 104857600) throw userErr('Копия больше 100 МБ');
+  progress('Загружаем…');
+  const path = me.id + '/backup.bin';
+  const { error } = await sb.storage.from('backups').upload(path, new Blob([bin], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: true });
+  if (error) throw error;
+  const { error: e2 } = await sb.from('key_backups').upsert({ user_id: me.id, version: 1, salt, kdf, object_path: path, size_bytes: bin.length, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+  if (e2) throw e2;
+  return messages.length;
+}
+async function restoreBackup(pass, progress) {
+  const row = await getBackupRow(); if (!row) throw userErr('Резервной копии нет');
+  if (!(await e2eStart())) throw userErr('Шифрование не запущено');
+  progress('Скачиваем копию…');
+  const { data, error } = await sb.storage.from('backups').download(row.object_path); if (error) throw error;
+  progress('Проверяем фразу…');
+  const key = await Backup.deriveKey(pass, row.salt, row.kdf);
+  const o = await Backup.open(await data.arrayBuffer(), key, me.id);
+  progress('Добавляем сообщения…');
+  const n = await E2E.importPlain(o.messages.map(Backup.toCache).filter(Boolean));
+  if (currentChat) { const li = document.querySelector(`#chatList li[data-id="${currentChat.id}"]`); if (li) { currentChat = null; li.click(); } }
+  return { total: o.messages.length, added: n };
+}
+function backupSheet(first) {
+  const row = bkRow, nodes = [];
+  if (first) nodes.push(el('p', '', 'Ключи этого устройства не удалось перенести. Старую переписку можно вернуть из резервной копии.'));
+  nodes.push(kvRow('Последняя копия', row ? fmtDT(row.updated_at) + ' · ' + fmtSize(row.size_bytes) : 'не создана'));
+  nodes.push(el('p', 'hint small', `Копия шифруется на этом устройстве фразой (не паролем от аккаунта, минимум ${BK_MIN} символов). Фразу нельзя восстановить: если забудете её, копию не открыть. Ключи шифрования в копию не входят.`));
+  const p1 = passInput('Фраза'), p2 = passInput('Фраза ещё раз (для новой копии)');
+  const st = el('p', 'hint small'); st.setAttribute('aria-live', 'polite');
+  const bc = el('button', '', 'Создать копию'); bc.type = 'button';
+  const br = el('button', 'ghost', 'Восстановить'); br.type = 'button'; br.hidden = !row;
+  const later = el('button', 'link', 'Позже'); later.type = 'button'; later.hidden = !first; later.onclick = () => $('sheetDlg').close();
+  const busy = on => { bc.disabled = br.disabled = p1.disabled = p2.disabled = on; };
+  bc.onclick = async () => {
+    if (p1.value.length < BK_MIN) return txt(st, `Фраза должна быть не короче ${BK_MIN} символов`);
+    if (p1.value !== p2.value) return txt(st, 'Фразы не совпадают');
+    busy(true);
+    try { const n = await createBackup(p1.value, s => txt(st, s)); txt(st, ''); p1.value = p2.value = ''; toast(`Копия создана: ${n} сообщ.`, 3000); $('sheetDlg').close(); paintBackupRow(); }
+    catch (e) { txt(st, ''); toast('Копия не создана: ' + (e.userMsg || ruErr(e)), 4000); }
+    finally { busy(false); }
+  };
+  br.onclick = async () => {
+    if (!p1.value) return txt(st, 'Введите фразу');
+    busy(true);
+    try { const r = await restoreBackup(p1.value, s => txt(st, s)); txt(st, ''); p1.value = p2.value = ''; toast(`Восстановлено: ${r.added} из ${r.total}`, 3000); $('sheetDlg').close(); }
+    catch (e) { txt(st, ''); toast(e instanceof Backup.BadPass ? 'Неверная фраза' : 'Не удалось восстановить: ' + (e.userMsg || ruErr(e)), 4000); }
+    finally { busy(false); }
+  };
+  if (first) { bc.hidden = true; p2.hidden = true; br.textContent = 'Восстановить из копии'; br.className = ''; }
+  const acts = el('div', 'bk-actions'); acts.append(bc, br, later);
+  nodes.push(p1, p2, st, acts);
+  sheet(first ? 'Восстановить переписку?' : 'Резервная копия', nodes);
+}
+$('rowBackup').onclick = async () => { try { await getBackupRow(); } catch (e) { return toast('Не удалось загрузить: ' + ruErr(e), 3000); } backupSheet(false); };
+async function offerRestore() { try { if (await getBackupRow()) backupSheet(true); } catch (e) { console.warn('key_backups', e); } }

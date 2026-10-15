@@ -6,6 +6,11 @@ import initWasm, { Store, distId, compareScannable } from './vendor/sigwasm/sigw
 const OTK_BATCH = 100, OTK_LOW = 20, CLAIM_TTL = 10 * 60 * 1000;
 let sb, store = null, kv = {}, db, uid = null, ready = null;
 const claimedAt = {};
+let rebindFail = false;
+/** Был ли при этом входе неудачный перенос ключей (тогда переписку можно вернуть из резервной копии) */
+export const rebindFailed = () => rebindFail;
+/** Аргументы rebind_device. Сюда же добавится подпись серверного challenge старым identity-ключом, когда сервер её потребует. */
+async function rebindArgs(oldDev) { return { p_old_device: oldDev }; }
 export class KeyChange extends Error { constructor(u) { super('Ключ безопасности собеседника изменился'); this.userId = u; } }
 export class NoKey extends Error {}
 
@@ -19,6 +24,7 @@ let dirty = false, ver = null;
 async function put(k, v) { kv[k] = v; dirty = true; await tx('readwrite', s => s.put(v, k)); }
 async function del(k) { delete kv[k]; dirty = true; await tx('readwrite', s => s.delete(k)); }
 async function saveStore() { await put('state', store.export()); }
+const jlist = k => { try { const v = JSON.parse(kv[k] || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 const jget = k => { try { return kv[k] ? JSON.parse(kv[k]) : {}; } catch { return {}; } };
 
 // Все операции с хранилищем строго по очереди (ratchet нельзя продвигать параллельно)
@@ -64,6 +70,25 @@ export function ensureReady() {
     const s = await token(); uid = s.user.id;
     const dev = sessionId(s.access_token);
     if (kv.dev === dev && kv.uid === uid && !kv.state) throw keysLost('локальное хранилище ключей повреждено (нет состояния)');
+    // Новая сессия того же пользователя, локальные ключи целы: переносим строку ключей старого устройства на новую сессию
+    // (rpc rebind_device) ДО публикации новых ключей — собеседники не увидят «ключ изменился». Не вышло — обычная регистрация.
+    if (kv.dev && kv.dev !== dev && kv.uid === uid && kv.state) {
+      const { data: has, error: he } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
+      if (!he && !has) {
+        try {
+          const { data: nd, error: re } = await sb.rpc('rebind_device', await rebindArgs(kv.dev));
+          if (re) throw re;
+          if (!nd) throw new Error('rebind_device вернул пустой id');
+          const cand = Store.load(kv.state); // проверяем, что состояние читается, до смены id
+          const old = jlist('olddevs'); if (!old.includes(kv.dev)) old.push(kv.dev);
+          await put('olddevs', JSON.stringify(old.slice(-20))); await put('dev', String(nd));
+          store = cand; await put('uploaded', '1');
+          for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп раздать новому id
+          await topUp();
+          return kv.dev;
+        } catch (err) { console.warn('rebind_device не удался, регистрируем новое устройство', err); rebindFail = true; }
+      }
+    }
     if (kv.dev !== dev || kv.uid !== uid) {
       // Новые ключи — только для новой сессии. Если сервер уже знает это устройство, а локальных ключей нет
       // (хранилище браузера очищено/сбой IndexedDB), молча не генерируем: собеседники увидели бы «ключ изменился».
@@ -188,7 +213,9 @@ async function h16(s) { const b = new Uint8Array(await crypto.subtle.digest('SHA
 export function decryptDM(m) {
   return locked(async () => {
     if (kv['pts:' + m.id]) return kv['pts:' + m.id];
-    const e = m.ciphertext && m.ciphertext[kv.dev];
+    // Своя запись: сначала текущий id устройства, затем прежние id (до rebind_device)
+    let e = m.ciphertext && m.ciphertext[kv.dev];
+    if (!e && m.ciphertext) for (const o of jlist('olddevs').reverse()) if (m.ciphertext[o]) { e = m.ciphertext[o]; break; }
     if (!e) return null;
     const ck = 'pt:' + m.id + ':' + await h16(e.b);
     if (kv[ck]) return kv[ck];
@@ -280,8 +307,9 @@ export function decryptGroup(chat, m) {
   return locked(async () => {
     const sk = m.ciphertext.sk, ck = 'ptg:' + m.id + ':' + await h16(sk);
     if (kv[ck]) return kv[ck];
+    if (kv['pts:' + m.id]) return kv['pts:' + m.id]; // своя копия или восстановлено из резервной копии
     if (!m.sender_device) throw new Error('нет sender_device');
-    if (m.sender_device === kv.dev) { if (kv['pts:' + m.id]) return kv['pts:' + m.id]; throw new NoKey('своё сообщение без копии'); }
+    if (m.sender_device === kv.dev || jlist('olddevs').includes(m.sender_device)) { if (kv['pts:' + m.id]) return kv['pts:' + m.id]; throw new NoKey('своё сообщение без копии'); }
     const du = kv['gdev:' + m.sender_device];
     if (!du || !store.groupHasKey(m.sender_device, chat, m.key_epoch)) throw new NoKey('ключ отправителя ещё не получен');
     if (du !== m.sender_id) throw new Error('устройство не принадлежит отправителю');
@@ -343,6 +371,13 @@ export async function decryptFile(ct, kB64, ivB64, h) {
   return p;
 }
 
+/** Резервная копия: открытый текст из локального кэша (если уже расшифровано) */
+export const cachedPlain = id => locked(async () => kv['pts:' + id] || null);
+/** Восстановление: [{id, pt}] → кэш pts:<id> (существующие не перезаписываем). Возвращает число добавленных. */
+export function importPlain(items) {
+  return locked(async () => { let n = 0; for (const x of items) { if (!x.id || kv['pts:' + x.id]) continue; await put('pts:' + x.id, x.pt); n++; } return n; });
+}
+export const oldDeviceIds = () => jlist('olddevs');
 /** Выход: стереть ключи этого устройства. */
 export function wipe() {
   return locked(async () => { ready = null; if (store) { store.free(); store = null; } if (!db) return; for (const k of Object.keys(kv)) if (k !== 'ver') await del(k); });
