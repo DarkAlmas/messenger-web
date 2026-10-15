@@ -137,10 +137,11 @@ function ensureReadyFor(sid) {
           // а наша неподтверждённая сессия продолжила бы слать PreKey-сообщения с уже израсходованным одноразовым ключом
           // собеседника → у него «invalid prekey identifier» (tg26). Поэтому каждому собеседнику — новый X3DH со свежим бандлом.
           // Старое состояние сессии libsignal архивирует (processBundle), и входящие по старой сессии по-прежнему расшифровываются.
-          await put('refresh', JSON.stringify(sessionDevs(cand)));
+          await put('refresh', JSON.stringify(sessionDevs(cand))); await put('refresh_mig', '1');
           for (const k of Object.keys(claimedAt)) delete claimedAt[k];
           for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп раздать новому id
-          await topUp();
+          // Сразу после успешного rebind replace_prekeys не вызываем: перенесённые одноразовые ключи остаются (догружаем только если их 0)
+          if (!(chk(await sb.rpc('my_prekey_count')) > 0)) await topUp();
           await ensureSecret(true); // секрет старого устройства больше не используем
           return kv.dev;
         } catch (err) {
@@ -173,6 +174,8 @@ function ensureReadyFor(sid) {
         if (!error && !row) { console.warn('e2e: нет строки devices_keys для этой сессии — регистрируем ключи'); for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); await put('uploaded', '0'); }
       }
     }
+    // Разовая миграция: устройство уже переносилось (rebind) старой версией сайта — сессии могли остаться привязанными к прежнему id
+    if (kv.refresh_mig !== '1') { if (jlist('olddevs').length && store) await put('refresh', JSON.stringify(sessionDevs(store))); await put('refresh_mig', '1'); }
     await publish(dev);
     await ensureSecret();
     await topUp();
@@ -220,13 +223,17 @@ async function replaceDeviceKeys(dev, row) {
   await put('otk_full', '1'); // следующий topUp загружает полный набор, не глядя на счётчик
 }
 
+const OTK_MAX_ID = 16777215;
+/** Одноразовые ключи: 1) новые сохраняем локально, 2) rpc replace_prekeys (сервер атомарно удаляет старые одноразовые ключи
+ *  устройства и вставляет новые), 3) только после успеха двигаем счётчик. Номера монотонные (otk_next) — с прошлыми не совпадают. */
 async function topUp() {
   const have = kv.otk_full === '1' ? 0 : (chk(await sb.rpc('my_prekey_count')) || 0);
   if (have >= OTK_LOW) return;
-  const next = +kv.otk_next;
-  const rows = JSON.parse(store.genPrekeys(next, OTK_BATCH)).map(r => ({ device_id: kv.dev, key_id: r.key_id, pub: r.pub }));
-  await saveStore(); await put('otk_next', String(next + OTK_BATCH)); // сначала локально
-  chk(await sb.from('one_time_prekeys').insert(rows));
+  let next = +kv.otk_next || 1;
+  if (next + OTK_BATCH - 1 > OTK_MAX_ID) next = 1;
+  const keys = JSON.parse(store.genPrekeys(next, OTK_BATCH)).map(r => ({ id: r.key_id, pub: r.pub }));
+  await saveStore(); await put('otk_next', String(next + OTK_BATCH)); // сначала локально (номера не переиспользуем даже при ошибке)
+  chk(await sb.rpc('replace_prekeys', { p_keys: keys }));
   if (kv.otk_full) await del('otk_full');
 }
 
