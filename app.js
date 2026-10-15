@@ -77,7 +77,7 @@ $('loginForm').onsubmit = async e => {
   try {
     if (regMode) {
       const username = normNick($('username').value);
-      if (!/^[a-z0-9_]{5,32}$/.test(username)) return txt($('authMsg'), 'Никнейм: 5–32 символа, только a-z, 0-9 и _');
+      if (!/^[a-z0-9_]{5,32}$/.test(username)) return txt($('authMsg'), 'От 5 до 32 символов: латиница, цифры и _');
       if (password.length < 10) return txt($('authMsg'), 'Пароль должен быть не короче 10 символов');
       const { error } = await sb.auth.signUp({ email, password, options: { data: { username, display_name: username } } });
       txt($('authMsg'), error ? ruErr(error) : 'Письмо с подтверждением отправлено на почту. Подтвердите и войдите.');
@@ -397,7 +397,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zg').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zh2').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1258,26 +1258,8 @@ async function scanQr() {
   } finally { stopScan(); }
 }
 $('safetyBtn').onclick = () => showSafety().catch(e => toastLong(ruErr(e)));
-$('findForm').onsubmit = async e => {
-  e.preventDefault();
-  const nick = normNick($('findUser').value); if (!nick) return;
-  const line = $('findLine'), btn = $('newDirect');
-  const say = (t, spin) => { line.className = 'find-line' + (spin ? ' spin' : ''); txt(line, t); line.hidden = !t; };
-  if (!/^[a-z0-9_]{5,32}$/.test(nick)) return say('Имя: 5–32 символа, a–z, 0–9, _');
-  btn.disabled = true; say('Ищем @' + nick + '…', true);
-  try {
-    const { list, error: fe } = await window.findUserExact(nick);
-    if (fe) return say(window.isRateErr(fe) ? 'Слишком часто, подождите немного' : ruErr(fe));
-    const u = list[0]; if (u && u.id) seedProfile(u);
-    if (!u) return say('Пользователь @' + nick + ' не найден');
-    if (u.id === me.id) return say('Это ваше собственное имя пользователя');
-    const { data: chatId, error } = await sb.rpc('create_direct_chat', { p_other: u.id });
-    if (error) return say(ruErr(error));
-    say(''); $('findUser').value = ''; $('findResults').hidden = true; await loadChats();
-    const li = document.querySelector(`#chatList li[data-id="${chatId}"]`); if (li) li.click();
-  } finally { btn.disabled = false; }
-};
-$('findUser').addEventListener('input', () => { $('findLine').hidden = true; });
+$('findForm').onsubmit = e => { e.preventDefault(); window.findSubmit(); };
+
 $('backBtn').onclick = () => history.length > 1 && location.hash === '#chat' ? history.back() : closeChatView();
 function closeChatView() { $('app').classList.remove('in-chat'); }
 $('peerBtn').onclick = async () => {
@@ -1504,7 +1486,7 @@ $('profForm').onsubmit = async e => {
   const name = $('pName').value.trim().replace(/\s+/g, ' '), nick = normNick($('pNick').value), bio = cleanBio($('pBio').value).trim();
   if (!name || name.length > 64) return txt($('profMsg'), 'Имя: от 1 до 64 символов');
   const oldNick = (profiles[me.id] || {}).username, nickChanged = nick !== oldNick;
-  if (nickChanged && !/^[a-z0-9_]{5,32}$/.test(nick)) return txt($('profMsg'), 'Никнейм: 5–32 символа, только a-z, 0-9 и _');
+  if (nickChanged && !/^[a-z0-9_]{5,32}$/.test(nick)) return txt($('profMsg'), 'От 5 до 32 символов: латиница, цифры и _');
   const upd = { display_name: name }; // имя пользователя меняется через set_username (account.js)
   if (profileExt) {
     upd.bio = bio || null; if (pickedColor && /^#[0-9a-fA-F]{6}$/.test(pickedColor)) upd.avatar_color = pickedColor;

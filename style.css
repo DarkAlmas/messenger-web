@@ -358,3 +358,5 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .file-row .fr-dl{color:inherit;flex:none}
 .file-row.broken .fr-ic{color:var(--color-danger)}.file-row.broken{cursor:default}
 .msg .img-prev.loading .spinner{width:28px;height:28px;border:3px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gspin .8s linear infinite}
+#newDirect{position:relative}#newDirect.busy .lbl{visibility:hidden}
+#newDirect.busy::after{content:"";position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gspin .8s linear infinite}

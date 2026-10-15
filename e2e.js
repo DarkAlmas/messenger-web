@@ -71,8 +71,17 @@ export class KeysLost extends Error {}
 const keysLost = why => { const e = new KeysLost('Ключи шифрования этого устройства не загрузились (' + why + '). Новые ключи НЕ создаются автоматически, чтобы не сломать переписку. Обновите страницу; если не поможет — выйдите и войдите снова.'); e.userMsg = e.message; return e; };
 
 /** Ключи для текущей сессии (session_id = device_id), публикация, пополнение одноразовых prekey. */
-export function ensureReady() {
+// Одна инициализация на сессию: device_id = session_id из JWT текущей сессии. Новая сессия (выход → вход) — новая инициализация
+// (rebind_device старого устройства или новые ключи); прежний id устройства как device_id не используется.
+let readySid = null;
+export async function ensureReady() {
+  const sid = sessionId((await token()).access_token);
+  if (sid !== readySid) { ready = null; readySid = sid; }
+  return ensureReadyFor(sid);
+}
+function ensureReadyFor(sid) {
   if (!ready) ready = locked(async () => {
+    freshDev = false; rebindFail = false;
     await initWasm({ module_or_path: new URL('./vendor/sigwasm/sigwasm_bg.wasm?v=20261014k', import.meta.url) });
     if (!db) {
       try { db = await idb(); await syncFromDb(); }
@@ -80,6 +89,7 @@ export function ensureReady() {
     }
     const s = await token(); uid = s.user.id;
     const dev = sessionId(s.access_token);
+    if (dev !== sid) throw new Error('сессия сменилась во время запуска шифрования'); // следующий вызов начнёт заново
     if (kv.dev === dev && kv.uid === uid && !kv.state) throw keysLost('локальное хранилище ключей повреждено (нет состояния)');
     // Новая сессия того же пользователя, локальные ключи целы: переносим строку ключей старого устройства на новую сессию
     // (rpc rebind_device) ДО публикации новых ключей — собеседники не увидят «ключ изменился». Не вышло — обычная регистрация.
@@ -144,7 +154,9 @@ async function publish(dev) {
 }
 
 /** Строка devices_keys этого устройства ещё на сервере? Нет (её удалила серверная чистка) — публикуем ключи заново. */
-export function checkDevice() {
+export async function checkDevice() {
+  const sid = sessionId((await token()).access_token);
+  if (kv.dev !== sid) { await ensureReady(); return 'reinit'; } // ключи прошлой сессии не публикуем под чужим device_id
   return locked(async () => {
     if (!store || !kv.dev) return 'not-ready';
     const { data, error } = await sb.from('devices_keys').select('device_id').eq('device_id', kv.dev).maybeSingle();

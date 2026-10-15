@@ -2,7 +2,8 @@
 (() => {
 const NICK_RE = /^[a-z0-9_]{5,32}$/;
 const REDIRECT = 'https://darkalmas.github.io/messenger-web/';
-const MSG = { ok: n => '@' + n + ' свободно', invalid: 'От 5 до 32 символов: a–z, 0–9 и _', reserved: 'Это имя недоступно', taken: 'Это имя уже занято', rate: 'Слишком часто, подождите немного', checking: 'Проверяем…' };
+const RULE = 'От 5 до 32 символов: латиница, цифры и _';
+const MSG = { ok: n => '@' + n + ' свободно', invalid: RULE, reserved: 'Это имя недоступно', taken: 'Это имя уже занято', rate: 'Слишком часто, подождите немного', checking: 'Проверяем…' };
 const isRate = e => e && (e.code === 'P0429' || /rate limited/i.test(e.message || '') || e.status === 429);
 
 // ---------- кнопка Google ----------
@@ -44,8 +45,8 @@ function nickChecker(input, hint, onState, getCurrent) {
   const show = (cls, text) => { hint.className = 'nick-hint ' + cls; txt(hint, text); input.classList.toggle('bad', cls === 'bad'); };
   const run = async () => {
     const n = input.value; const my = ++seq;
-    if (getCurrent && n === getCurrent()) { show('', ''); return onState('same', n); }
-    if (!NICK_RE.test(n)) { show(n ? 'bad' : '', n ? MSG.invalid : ''); return onState('invalid', n); }
+    if (getCurrent && n === getCurrent()) { show('', RULE); return onState('same', n); }
+    if (!NICK_RE.test(n)) { show(n ? 'bad' : '', RULE); return onState('invalid', n); }
     if (Date.now() < backoffUntil) { show('wait', MSG.rate); onState('rate', n); clearTimeout(timer); timer = setTimeout(run, backoffUntil - Date.now()); return; }
     show('wait spin', MSG.checking); onState('checking', n);
     const { data, error } = await sb.rpc('check_username', { p_username: n });
@@ -99,7 +100,7 @@ async function checkChosen(s) {
   if (checkedUid === s.user.id) return; checkedUid = s.user.id;
   const { data, error } = await sb.from('profiles').select('username_chosen').eq('id', s.user.id).maybeSingle();
   if (error || !data || data.username_chosen !== false) return;
-  nkIn.value = ''; nk.show('', ''); nkGo.disabled = true; suggest(s.user);
+  nkIn.value = ''; nk.show('', RULE); nkGo.disabled = true; suggest(s.user);
   if (!nkDlg.open) nkDlg.showModal(); nkIn.focus();
 }
 sb.auth.onAuthStateChange((e, s) => { setTimeout(() => checkChosen(s), 0); });
@@ -128,34 +129,58 @@ function findHint(t, bad) {
   const li = document.createElement('li'); li.className = 'empty' + (bad ? ' bad' : ''); txt(li, t); fRes.append(h, li); fRes.hidden = false;
 }
 window.findUserExact = findUser; window.isRateErr = isRate;
+// Один запрос на запрос: ответ на тот же q (в полёте или за последние 5 с) переиспользуем
+const lookCache = {};
+function lookup(q) {
+  const c = lookCache[q]; if (c && (c.pending || Date.now() - c.at < 5000)) return c.p;
+  const e = lookCache[q] = { pending: true, at: Date.now() };
+  e.p = findUser(q).then(r => { e.pending = false; e.at = Date.now(); if (r.error) delete lookCache[q]; return r; });
+  return e.p;
+}
+async function openDM(p) {
+  const { data: chatId, error: ce } = await sb.rpc('create_direct_chat', { p_other: p.id });
+  if (ce) return toast(ruErr(ce), 3000);
+  fIn.value = ''; fRes.hidden = true; await loadChats();
+  const c = document.querySelector(`#chatList li[data-id="${chatId}"]`); if (c) c.click();
+}
+/** Показ результата — только в блоке «Глобальный поиск» */
+function renderFind(q, r) {
+  const list = ((r && r.list) || []).filter(p => !me || p.id !== me.id).slice(0, 1);
+  if (r.error && isRate(r.error)) return findHint(MSG.rate);
+  if (r.error) return findHint(ruErr(r.error), true);
+  if (!list.length) return findHint(r.list && r.list.length ? 'Это ваше собственное имя пользователя' : 'Пользователь @' + q + ' не найден');
+  fRes.replaceChildren(); const h = document.createElement('li'); h.className = 'sec'; txt(h, 'Глобальный поиск'); fRes.append(h);
+  for (const p of list) {
+    const li = document.createElement('li'); li.tabIndex = 0;
+    const a = document.createElement('span'); a.className = 'ava'; fillAvatar(a, p);
+    const t = document.createElement('span'); const b = document.createElement('b'); txt(b, displayName(p)); const sm = document.createElement('small'); txt(sm, '@' + p.username); t.append(b, sm);
+    li.append(a, t);
+    li.onclick = li.onkeydown = ev => { if (ev.type === 'keydown' && ev.key !== 'Enter') return; openDM(p); };
+    fRes.append(li);
+  }
+  fRes.hidden = false;
+  return list[0];
+}
+/** Проверка имени до запроса: подсказка (серая) или ошибка (красная) в блоке */
+function precheck(q, strict) {
+  if (NICK_RE.test(q)) return true;
+  findHint(RULE, strict || /[^a-z0-9_]/.test(q) || q.length > 32); return false;
+}
 fIn.addEventListener('input', () => {
   clearTimeout(fTimer); const my = ++fSeq;
   const q = normNick(fIn.value);
   if (!fIn.value.trim().startsWith('@') || !q) { fRes.hidden = true; fRes.replaceChildren(); return; }
-  if (!NICK_RE.test(q)) return findHint(/^[a-z0-9_]{1,4}$/.test(q) ? 'Введите имя пользователя полностью' : 'Имя: 5–32 символа, a–z, 0–9, _');
-  fTimer = setTimeout(async () => {
-    const { list: found, error } = await findUser(q);
-    if (my !== fSeq) return;
-    fRes.replaceChildren(); const h = document.createElement('li'); h.className = 'sec'; txt(h, 'Глобальный поиск'); fRes.append(h);
-    const list = (found || []).filter(p => !me || p.id !== me.id).slice(0, 1);
-    if (error && isRate(error)) return findHint(MSG.rate);
-    if (error) return findHint(ruErr(error), true);
-    if (!list.length) return findHint('Пользователь @' + q + ' не найден');
-    for (const p of list) {
-      const li = document.createElement('li'); li.tabIndex = 0;
-      const a = document.createElement('span'); a.className = 'ava'; fillAvatar(a, p);
-      const t = document.createElement('span'); const b = document.createElement('b'); txt(b, displayName(p)); const sm = document.createElement('small'); txt(sm, '@' + p.username); t.append(b, sm);
-      li.append(a, t);
-      li.onclick = li.onkeydown = async ev => {
-        if (ev.type === 'keydown' && ev.key !== 'Enter') return;
-        const { data: chatId, error: ce } = await sb.rpc('create_direct_chat', { p_other: p.id });
-        if (ce) return toast(ruErr(ce), 3000);
-        fIn.value = ''; fRes.hidden = true; await loadChats();
-        const c = document.querySelector(`#chatList li[data-id="${chatId}"]`); if (c) c.click();
-      };
-      fRes.append(li);
-    }
-    fRes.hidden = false;
-  }, 300);
+  if (!precheck(q)) return;
+  fTimer = setTimeout(async () => { const r = await lookup(q); if (my === fSeq) renderFind(q, r); }, 300);
 });
+// Enter / «Написать»: тот же запрос (без дубля), результат в блоке; найден — сразу открываем чат
+window.findSubmit = async () => {
+  clearTimeout(fTimer); const my = ++fSeq;
+  const q = normNick(fIn.value); if (!q) return;
+  if (!precheck(q, true)) return;
+  const btn = $('newDirect'); if (btn.disabled) return;
+  btn.style.width = btn.offsetWidth + 'px'; btn.disabled = true; btn.classList.add('busy');
+  try { const r = await lookup(q); if (my !== fSeq) return; const p = renderFind(q, r); if (p) await openDM(p); }
+  finally { btn.disabled = false; btn.classList.remove('busy'); btn.style.width = ''; }
+};
 })();
