@@ -125,10 +125,7 @@ function ensureReadyFor(sid) {
     if (kv.dev && kv.dev !== dev && kv.uid === uid && kv.state && kv.dsec) {
       const { data: has, error: he } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
       if (!he && !has) {
-        try {
-          const { data: nd, error: re } = await sb.rpc('rebind_device', await rebindArgs(kv.dev));
-          if (re) throw new Error(/rebind denied/i.test(re.message || '') ? 'rebind denied' : 'rebind_device: ' + (re.code || 'ошибка'));
-          if (!nd) throw new Error('rebind_device вернул пустой id');
+        const adopt = async nd => {
           const cand = Store.load(kv.state); // проверяем, что состояние читается, до смены id
           const old = jlist('olddevs'); if (!old.includes(kv.dev)) old.push(kv.dev);
           await put('olddevs', JSON.stringify(old.slice(-20))); await put('dev', String(nd));
@@ -136,15 +133,27 @@ function ensureReadyFor(sid) {
           // Сессии libsignal привязаны к адресу (device_id). После rebind у собеседника нет сессии с НОВЫМ адресом,
           // а наша неподтверждённая сессия продолжила бы слать PreKey-сообщения с уже израсходованным одноразовым ключом
           // собеседника → у него «invalid prekey identifier» (tg26). Поэтому каждому собеседнику — новый X3DH со свежим бандлом.
-          // Старое состояние сессии libsignal архивирует (processBundle), и входящие по старой сессии по-прежнему расшифровываются.
           await put('refresh', JSON.stringify(sessionDevs(cand))); await put('refresh_mig', '1');
           for (const k of Object.keys(claimedAt)) delete claimedAt[k];
           for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп раздать новому id
           // Сразу после успешного rebind replace_prekeys не вызываем: перенесённые одноразовые ключи остаются (догружаем только если их 0)
           if (!(chk(await sb.rpc('my_prekey_count')) > 0)) await topUp();
-          await ensureSecret(true); // секрет старого устройства больше не используем
+          await ensureSecret(true); await put('dsec_mig', '1'); // секрет старого устройства больше не используем
           return kv.dev;
+        };
+        try {
+          const { data: nd, error: re } = await sb.rpc('rebind_device', await rebindArgs(kv.dev));
+          if (re) throw new Error(/rebind denied/i.test(re.message || '') ? 'rebind denied' : 'rebind_device: ' + (re.code || 'ошибка'));
+          if (!nd) throw new Error('rebind_device вернул пустой id');
+          return await adopt(nd);
         } catch (err) {
+          // Ответ rebind_device потерялся, но перенос прошёл: строка этой сессии уже с НАШИМ identity — принимаем её, новые ключи не заводим
+          if (!/rebind denied/.test((err && err.message) || '')) {
+            try {
+              const { data: r2 } = await sb.from('devices_keys').select('identity_pub').eq('device_id', dev).maybeSingle();
+              if (r2 && r2.identity_pub === identityPub(Store.load(kv.state))) return await adopt(dev);
+            } catch { /* ниже — обычная регистрация */ }
+          }
           // 'rebind denied' — штатно (старый сеанс отозван/секрет не подошёл): молча заводим новые ключи
           if (!/rebind denied/.test((err && err.message) || '')) console.warn('rebind_device не удался, регистрируем новое устройство:', err && err.message);
           rebindFail = true;
@@ -177,8 +186,11 @@ function ensureReadyFor(sid) {
     // Разовая миграция: устройство уже переносилось (rebind) старой версией сайта — сессии могли остаться привязанными к прежнему id
     if (kv.refresh_mig !== '1') { if (jlist('olddevs').length && store) await put('refresh', JSON.stringify(sessionDevs(store))); await put('refresh_mig', '1'); }
     await publish(dev);
-    await ensureSecret();
     await topUp();
+    // Секрет — сразу после загрузки ключей. Разовая миграция dsec_mig: строки, пересозданные 87b07d4 (delete+insert),
+    // потеряли rebind_hash на сервере — такие устройства задают секрет заново при ближайшем запуске.
+    await ensureSecret(kv.dsec_mig !== '1');
+    if (kv.dsec_set === '1' && kv.dsec_rotate !== '1') await put('dsec_mig', '1');
     return dev;
   }).catch(e => { ready = null; throw e; });
   return ready;
@@ -212,15 +224,16 @@ export async function checkDevice() {
   });
 }
 
-/** Строка devices_keys этой сессии уже есть на сервере, но она не наша (rebind прошёл, а ответ потерялся; прошлый запуск и т.п.).
- *  Раньше делали UPDATE ключей строки — одноразовые ключи прошлого набора (те же номера 1..N, чужие публичные ключи) оставались
- *  на сервере, собеседники брали их, и у нас было «invalid prekey identifier». Удалить одноразовые ключи клиент не может (нет политики
- *  DELETE на one_time_prekeys), поэтому удаляем строку устройства (каскадно уходят все её одноразовые ключи) и вставляем заново.
- *  Когда на сервере появится RPC replace_prekeys (атомарная замена), достаточно заменить тело этой функции. */
+const identityPub = st => JSON.parse(st.publicRow()).identity_pub;
+/** Строка devices_keys этой сессии уже есть на сервере (повторная публикация, прошлый запуск). Строку НЕ удаляем: вместе с ней
+ *  пропадал rebind_hash (87b07d4) — следующий rebind не проходил, а через час чистка удаляла ключи устройства. identity не меняем никогда:
+ *  тот же identity — обновляем подписанный/Kyber prekey и заменяем одноразовые ключи через replace_prekeys; другой identity — ошибка. */
 async function replaceDeviceKeys(dev, row) {
-  chk(await sb.from('devices_keys').delete().eq('device_id', dev));
-  chk(await sb.from('devices_keys').insert(row));
-  await put('otk_full', '1'); // следующий topUp загружает полный набор, не глядя на счётчик
+  const cur = chk(await sb.from('devices_keys').select('identity_pub').eq('device_id', dev).maybeSingle());
+  if (!cur || cur.identity_pub !== row.identity_pub) throw keysLost('на сервере для этого устройства другой ключ личности');
+  const upd = { ...row }; delete upd.identity_pub; delete upd.device_id; delete upd.user_id;
+  chk(await sb.from('devices_keys').update(upd).eq('device_id', dev));
+  await put('otk_full', '1'); // следующий topUp заменяет полный набор одноразовых ключей (replace_prekeys)
 }
 
 const OTK_MAX_ID = 16777215;

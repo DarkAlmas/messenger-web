@@ -404,7 +404,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zq').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zr').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -964,8 +964,8 @@ function paintTicks(d) {
   const [ic, title, cls] = st === 'sending' ? ['schedule', 'Отправляется', 'sending'] : st === 'failed' ? ['error', 'Не отправлено — нажмите', 'failed']
     : isRead(d.dataset.at) ? ['done_all', 'Прочитано', 'read'] : isDelivered(d.dataset.at) ? ['done_all', 'Доставлено', 'delivered'] : ['check', 'Отправлено', 'sent'];
   t.className = 'ticks ms ' + cls; txt(t, ic); t.title = title; t.setAttribute('aria-label', title);
-  if (st === 'failed') { t.setAttribute('role', 'button'); t.tabIndex = 0; t.onclick = ev => { ev.stopPropagation(); outMenu(ev, d.dataset.id); }; }
-  else { t.removeAttribute('role'); t.removeAttribute('tabindex'); t.onclick = null; }
+  if (st === 'failed') { t.setAttribute('role', 'button'); t.tabIndex = 0; t.onclick = ev => { ev.stopPropagation(); outMenu(ev, d.dataset.id); }; d.onclick = ev => { if (d.dataset.state === 'failed') { ev.stopPropagation(); outMenu(ev, d.dataset.id); } }; }
+  else { t.removeAttribute('role'); t.removeAttribute('tabindex'); t.onclick = null; d.onclick = null; }
 }
 function paintAllTicks() { document.querySelectorAll('#messages .msg.mine').forEach(paintTicks); }
 setInterval(() => { if (currentChat && document.visibilityState === 'visible') loadReadState(); }, 8000);
@@ -997,7 +997,7 @@ $('sendForm').onsubmit = async e => {
   e.preventDefault();
   const body = $('msgInput').value.trim(); if (!body) return;
   // Раньше при currentChat = null (чат на экране, но состояние сброшено) отправка молча ничего не делала
-  if (!currentChat) { toastLong('Сообщение не отправлено: чат не открыт. Откройте чат заново — текст остался в поле ввода.'); return; }
+  if (!currentChat) { toast('Чат не открыт — текст остался в поле ввода', 3000); return; }
   const chat = currentChat, rt = replyTo, ed = editing;
   if (ed) {
     const x = msgData[ed];
