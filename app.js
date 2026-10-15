@@ -256,6 +256,7 @@ function chatMenuItems(c) {
   const muted = isMuted(c), H = 3600e3;
   const mute = until => () => chatPrefs(c, { p_muted_until: until }, 'Уведомления отключены');
   return [
+    ...(c.kind === 'direct' && c === currentChat && peerId ? [{ t: E2E && E2E.isVerified(peerId) ? 'Код безопасности · проверен' : 'Код безопасности', i: 'verified_user', f: () => showSafety().catch(e => toastLong(ruErr(e))) }] : []),
     { t: c.pinned ? 'Открепить' : 'Закрепить', i: 'push_pin', f: () => chatPrefs(c, { p_pinned: !c.pinned }, c.pinned ? 'Чат откреплён' : 'Чат закреплён') },
     ...(muted ? [{ t: 'Включить звук', i: 'notifications', f: () => chatPrefs(c, { p_unmute: true }, 'Звук включён') }] : [
       { t: 'Без звука на 1 час', i: 'notifications_off', f: mute(new Date(Date.now() + H).toISOString()) },
@@ -403,7 +404,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zo').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zp').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -994,7 +995,9 @@ window.addEventListener('focus', maybeMarkRead);
 $('messages').addEventListener('scroll', maybeMarkRead, { passive: true });
 $('sendForm').onsubmit = async e => {
   e.preventDefault();
-  const body = $('msgInput').value.trim(); if (!body || !currentChat) return;
+  const body = $('msgInput').value.trim(); if (!body) return;
+  // Раньше при currentChat = null (чат на экране, но состояние сброшено) отправка молча ничего не делала
+  if (!currentChat) { toastLong('Сообщение не отправлено: чат не открыт. Откройте чат заново — текст остался в поле ввода.'); return; }
   const chat = currentChat, rt = replyTo, ed = editing;
   if (ed) {
     const x = msgData[ed];
@@ -1032,7 +1035,7 @@ async function outRun(job) {
     const had = job.tries ? await onServer(job.id).catch(() => null) : null;
     job.tries = (job.tries || 0) + 1;
     const extra = { ...job.extra, id: job.id };
-    const row = had || (job.kind === 'text' ? await sendPayload(job.chat, JSON.stringify({ v: 1, t: job.text }), extra) : await sendFile(job.chat, job.file, extra, job.caption, undefined, job));
+    const row = had || await sendDeadline(job.kind === 'text' ? sendPayload(job.chat, JSON.stringify({ v: 1, t: job.text }), extra) : sendFile(job.chat, job.file, extra, job.caption, undefined, job), job);
     delete outbox[job.id];
     const el = msgEls[job.id];
     if (el) { delete el.dataset.state; if (row && row.created_at) el.dataset.at = row.created_at; paintTicks(el); } // время сервера, не часы клиента
@@ -1044,7 +1047,18 @@ async function outRun(job) {
     return false;
   }
 }
-function outSend(job) { job.id = crypto.randomUUID(); outbox[job.id] = job; if (currentChat === job.chat) outBubble(job); return outRun(job); }
+function outSend(job) {
+  job.id = crypto.randomUUID(); outbox[job.id] = job;
+  try { if (currentChat && currentChat.id === job.chat.id) outBubble(job); } catch (e) { console.error('outBubble', e); }
+  return outRun(job);
+}
+// Отправка никогда не висит молча: общий предел на всё задание (шифрование, ключи, загрузка, вставка)
+let SEND_TEXT_MS = 45000, SEND_FILE_MS = 180000; // let: тесты уменьшают предел
+function sendDeadline(p, job) {
+  let t; const lim = job.kind === 'text' ? SEND_TEXT_MS : SEND_FILE_MS;
+  const to = new Promise((_, rej) => { t = setTimeout(() => rej(userErr('Сообщение не отправлено: нет ответа сервера за ' + Math.round(lim / 1000) + ' с. Нажмите на значок, чтобы повторить.')), lim); });
+  return Promise.race([p, to]).finally(() => clearTimeout(t));
+}
 function outMenu(ev, id) {
   const job = outbox[id]; if (!job) return;
   openMenu(ev, [{ t: 'Повторить', i: 'refresh', f: () => outRun(job) },

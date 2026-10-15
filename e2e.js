@@ -133,6 +133,12 @@ function ensureReadyFor(sid) {
           const old = jlist('olddevs'); if (!old.includes(kv.dev)) old.push(kv.dev);
           await put('olddevs', JSON.stringify(old.slice(-20))); await put('dev', String(nd));
           store = cand; await put('uploaded', '1');
+          // Сессии libsignal привязаны к адресу (device_id). После rebind у собеседника нет сессии с НОВЫМ адресом,
+          // а наша неподтверждённая сессия продолжила бы слать PreKey-сообщения с уже израсходованным одноразовым ключом
+          // собеседника → у него «invalid prekey identifier» (tg26). Поэтому каждому собеседнику — новый X3DH со свежим бандлом.
+          // Старое состояние сессии libsignal архивирует (processBundle), и входящие по старой сессии по-прежнему расшифровываются.
+          await put('refresh', JSON.stringify(sessionDevs(cand)));
+          for (const k of Object.keys(claimedAt)) delete claimedAt[k];
           for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп раздать новому id
           await topUp();
           await ensureSecret(true); // секрет старого устройства больше не используем
@@ -155,7 +161,7 @@ function ensureReadyFor(sid) {
       // Новая сессия = новое устройство; доверие (trust/verified) к собеседникам того же пользователя сохраняем
       const keepTrust = kv.uid === uid;
       // тот же пользователь: доверие и уже расшифрованный текст (pts:/pt:/ptg:) оставляем — история и резервная копия не теряются
-      const keep = k => keepTrust && /^(trust|pending|verified|kc|nd|seen|kcblock|pts|pt|ptg):/.test(k);
+      const keep = k => keepTrust && /^(trust|pending|verified|kc|nd|seen|iks|kcblock|pts|pt|ptg):/.test(k);
       for (const k of Object.keys(kv)) if (!keep(k)) await del(k);
       store = Store.newDevice(); freshDev = true;
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
@@ -181,8 +187,7 @@ async function publish(dev) {
       const { error } = await sb.from('devices_keys').insert(row);
       if (error) {
         if (!/duplicate|23505/.test(error.message + error.code)) throw error;
-        delete row.device_id; delete row.user_id; // UPDATE разрешён только по колонкам ключей
-        chk(await sb.from('devices_keys').update(row).eq('device_id', dev));
+        await replaceDeviceKeys(dev, row);
       }
       await put('uploaded', '1');
     }
@@ -204,19 +209,36 @@ export async function checkDevice() {
   });
 }
 
+/** Строка devices_keys этой сессии уже есть на сервере, но она не наша (rebind прошёл, а ответ потерялся; прошлый запуск и т.п.).
+ *  Раньше делали UPDATE ключей строки — одноразовые ключи прошлого набора (те же номера 1..N, чужие публичные ключи) оставались
+ *  на сервере, собеседники брали их, и у нас было «invalid prekey identifier». Удалить одноразовые ключи клиент не может (нет политики
+ *  DELETE на one_time_prekeys), поэтому удаляем строку устройства (каскадно уходят все её одноразовые ключи) и вставляем заново.
+ *  Когда на сервере появится RPC replace_prekeys (атомарная замена), достаточно заменить тело этой функции. */
+async function replaceDeviceKeys(dev, row) {
+  chk(await sb.from('devices_keys').delete().eq('device_id', dev));
+  chk(await sb.from('devices_keys').insert(row));
+  await put('otk_full', '1'); // следующий topUp загружает полный набор, не глядя на счётчик
+}
+
 async function topUp() {
-  const have = chk(await sb.rpc('my_prekey_count')) || 0;
+  const have = kv.otk_full === '1' ? 0 : (chk(await sb.rpc('my_prekey_count')) || 0);
   if (have >= OTK_LOW) return;
   const next = +kv.otk_next;
   const rows = JSON.parse(store.genPrekeys(next, OTK_BATCH)).map(r => ({ device_id: kv.dev, key_id: r.key_id, pub: r.pub }));
   await saveStore(); await put('otk_next', String(next + OTK_BATCH)); // сначала локально
   chk(await sb.from('one_time_prekeys').insert(rows));
+  if (kv.otk_full) await del('otk_full');
 }
+
+/** Устройства, с которыми в хранилище есть сессия (ключи карты sess из export; секретов не касается). */
+function sessionDevs(st) { try { return Object.keys(JSON.parse(st.export()).sess || {}); } catch { return []; } }
+const needsFresh = d => jlist('refresh').includes(d);
+async function freshDone(d) { const r = jlist('refresh'); const i = r.indexOf(d); if (i >= 0) { r.splice(i, 1); await put('refresh', JSON.stringify(r)); } }
 
 /** Доверенные устройства пользователя с готовой сессией; TOFU как в Android. */
 async function devicesFor(user) {
   const trust = jget('trust:' + user);
-  if (!claimedAt[user] || Date.now() - claimedAt[user] > CLAIM_TTL) {
+  if (!claimedAt[user] || Date.now() - claimedAt[user] > CLAIM_TTL || Object.keys(trust).some(needsFresh)) {
     let rows;
     try { rows = chk(await sb.rpc('claim_prekeys', { p_user: user })) || []; }
     catch (err) {
@@ -235,22 +257,28 @@ async function devicesFor(user) {
     // «Известный контакт» — считаем ДО удаления ушедших устройств: на сервере при выходе строка старого устройства удаляется,
     // и новое устройство приходит вместо него (а не рядом, как в моке) — иначе trust пуст и строка «новое устройство» не появлялась
     const known = Object.keys(trust).length > 0 || jlist('seen:' + user).length > 0;
+    // identity, которые мы уже знали у этого пользователя: устройство с тем же identity под новым id — это перенос (rebind_device)
+    // того же устройства, а не новое устройство: код безопасности тот же, строку «новое устройство» не показываем
+    const knownIks = new Set([...Object.values(trust), ...jlist('iks:' + user)]);
     if (Object.keys(trust).length) await markSeen(user, Object.keys(trust));
     if (Object.keys(valid).length) for (const d of Object.keys(trust)) if (!valid[d]) delete trust[d];
     let changed = false, added = false;
     for (const [d, o] of Object.entries(valid)) {
       if (trust[d] && trust[d] !== o.identity_pub) { changed = true; store.deleteSession(d); } // ключ этого устройства на сервере ≠ сохранённого
-      else if (!trust[d] && known && !jlist('seen:' + user).includes(d)) added = true; // новое устройство (не первый контакт)
+      else if (!trust[d] && known && !jlist('seen:' + user).includes(d) && !knownIks.has(o.identity_pub)) added = true; // новое устройство (не первый контакт)
       trust[d] = o.identity_pub;
     }
-    await put('trust:' + user, JSON.stringify(trust)); await markSeen(user, Object.keys(trust));
+    await put('trust:' + user, JSON.stringify(trust)); await markSeen(user, Object.keys(trust)); await markIks(user, Object.values(trust));
     if (changed) await keyChanged(user);
     if (added) await sysEvent('nd:' + user);
+    // Проверенный собеседник и устройство с НОВЫМ identity (вход в чистом профиле, переустановка): код не сверен — как смена ключа,
+    // снимаем «проверено» и блокируем первую отправку. Тот же identity под новым id (rebind) сюда не попадает.
+    if (added && kv['verified:' + user] && !changed) await keyChanged(user);
     for (const [d, o] of Object.entries(valid)) {
       if (trust[d] !== o.identity_pub) continue;
       await put('devuser:' + d, user);
-      if (store.hasSession(d)) continue;
-      store.processBundle(JSON.stringify(o));
+      if (store.hasSession(d) && !needsFresh(d)) continue;
+      store.processBundle(JSON.stringify(o)); await freshDone(d);
     }
     await saveStore();
   }
@@ -260,6 +288,7 @@ async function devicesFor(user) {
 export const hasPendingChange = () => false; // смена ключа не блокирует: системная строка в чате (keyEvents)
 /** Событие «код безопасности изменился» — только локально (IndexedDB этого браузера), на сервер не уходит и с сервера не принимается. */
 async function sysEvent(k) { const ev = jlist(k); ev.push(new Date().toISOString()); await put(k, JSON.stringify(ev.slice(-50))); }
+async function markIks(user, iks) { const s = jlist('iks:' + user); let ch = false; for (const k of iks) if (k && !s.includes(k)) { s.push(k); ch = true; } if (ch) await put('iks:' + user, JSON.stringify(s.slice(-20))); }
 async function markSeen(user, devs) { const s = jlist('seen:' + user); let ch = false; for (const d of devs) if (!s.includes(d)) { s.push(d); ch = true; } if (ch) await put('seen:' + user, JSON.stringify(s.slice(-50))); }
 async function keyChanged(user) {
   await sysEvent('kc:' + user);
@@ -299,6 +328,19 @@ export function encryptDM(peer, pt) {
 }
 export const rememberOwn = (id, pt, sk) => locked(async () => { await put('pts:' + id, pt); if (sk) await put('ptg:' + id + ':' + await h16(sk), pt); });
 
+/** Номера ключей из PreKeySignalMessage (только id, не ключи): версия (1 байт) + protobuf: 1 preKeyId, 6 signedPreKeyId, 7 kyberPreKeyId. */
+function preKeyIds(b64) {
+  try {
+    const u = Uint8Array.from(atob(b64), c => c.charCodeAt(0)); const out = { otk: '-', spk: '-', kyber: '-' }; let i = 1;
+    const vi = () => { let r = 0, sh = 0, x; do { x = u[i++]; r += (x & 0x7f) * 2 ** sh; sh += 7; } while (x & 0x80 && i < u.length); return r; };
+    while (i < u.length) {
+      const tag = vi(), f = tag >>> 3, wt = tag & 7;
+      if (wt === 0) { const v = vi(); if (f === 1) out.otk = v; else if (f === 6) out.spk = v; else if (f === 7) out.kyber = v; }
+      else if (wt === 2) { const n = vi(); i += n; } else if (wt === 5) i += 4; else if (wt === 1) i += 8; else break;
+    }
+    return out;
+  } catch { return null; }
+}
 async function h16(s) { const b = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); return [...b].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 16); }
 
 /** Расшифровка личного сообщения. null — не для этого устройства. */
@@ -325,7 +367,13 @@ export function decryptDM(m) {
           try { s = store.decrypt(e.f, e.t, e.b); msg = null; } catch (e2) { msg = (e2 && e2.message) || String(e2); }
         }
       }
-      if (msg) { const x = new Error('decrypt t=' + e.t + ' from ' + String(e.f).slice(0, 8) + ': ' + msg); x.cause = err; throw x; }
+      if (msg) {
+        const env = m.ciphertext[kv.dev] === e ? kv.dev : (jlist('olddevs').find(o => m.ciphertext[o] === e) || '?');
+        const pk = +e.t === 3 ? preKeyIds(e.b) : null;
+        const x = new Error('decrypt t=' + e.t + ' from ' + String(e.f).slice(0, 8) + ' to ' + String(env).slice(0, 8) + (env === kv.dev ? '' : ' (прежний id)')
+          + (pk ? ' prekey=' + pk.otk + ' spk=' + pk.spk + ' kyber=' + pk.kyber : '') + ': ' + msg);
+        x.cause = err; throw x;
+      }
     }
     await saveStore(); await put(ck, s);
     if (m.sender_id) {
@@ -333,8 +381,9 @@ export function decryptDM(m) {
       const trust = jget('trust:' + m.sender_id), ik = store.identityOf(e.f);
       if (ik && trust[e.f] !== ik) {
         const was = trust[e.f], known = Object.keys(trust).length > 0 || jlist('seen:' + m.sender_id).length > 0, seen = jlist('seen:' + m.sender_id).includes(e.f);
-        trust[e.f] = ik; await put('trust:' + m.sender_id, JSON.stringify(trust)); await markSeen(m.sender_id, [e.f]);
-        if (was) await keyChanged(m.sender_id); else if (known && !seen) await sysEvent('nd:' + m.sender_id);
+        const sameIk = Object.values(trust).includes(ik) || jlist('iks:' + m.sender_id).includes(ik);
+        trust[e.f] = ik; await put('trust:' + m.sender_id, JSON.stringify(trust)); await markSeen(m.sender_id, [e.f]); await markIks(m.sender_id, [ik]);
+        if (was) await keyChanged(m.sender_id); else if (known && !seen && !sameIk) await sysEvent('nd:' + m.sender_id);
       }
     }
     return s;
@@ -456,7 +505,13 @@ export function verifyScanned(peer, scanned) {
 }
 /** Пользователь сам сравнил цифры и подтвердил совпадение. */
 export function markVerified(peer) { return locked(async () => { await acceptPendingInner(peer); await put('verified:' + peer, kv['trust:' + peer] || '{}'); if (kv['kcblock:' + peer]) await del('kcblock:' + peer); }); }
-export const isVerified = peer => kv['verified:' + peer] != null && kv['verified:' + peer] === kv['trust:' + peer];
+/** Проверено = каждый текущий identity собеседника был среди сверенных. Сравниваем identity, а не id устройств:
+ *  после rebind_device id меняется, ключ — нет, и отметка «проверено» не должна пропадать. */
+export const isVerified = peer => {
+  if (kv['verified:' + peer] == null) return false;
+  const v = new Set(Object.values(jget('verified:' + peer))), t = Object.values(jget('trust:' + peer));
+  return t.length > 0 && t.every(ik => v.has(ik));
+};
 async function acceptPendingInner(user) {
   if (!kv['pending:' + user]) return;
   const trust = jget('trust:' + user), pending = jget('pending:' + user);
