@@ -400,7 +400,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zm').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zn').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1072,8 +1072,9 @@ async function insertEncrypted(row, pt) {
   let { data, error } = await sb.from('messages').insert(row).select('id, created_at').single();
   if (error) { // ответ мог потеряться, а строка — записаться; дубль ключа (23505/409) = уже на сервере. upsert не используем
     const dup = error.code === '23505' || error.status === 409 || /duplicate key/i.test(error.message || '');
-    const had = await onServer(row.id).catch(() => null);
+    let checked = false; const had = await onServer(row.id).then(r => { checked = true; return r; }, () => null);
     if (had || dup) { data = had || { id: row.id, created_at: null }; error = null; }
+    else if (checked) error.absent = true; // проверка прошла и подтвердила: строки нет
   }
   if (error) { delete sentOwn[sig]; throw error; }
   await E2E.rememberOwn(data.id, pt, row.ciphertext.sk);
@@ -1149,6 +1150,11 @@ $('fileInput').onchange = async () => {
   fileSheet(file);
 };
 async function sendFile(chat, file, extra, caption, fw, job) {
+  if (job && job.uploaded) { // файл уже в Storage (прошлая попытка не знала, записалась ли строка) — не загружаем заново
+    const u = job.uploaded;
+    try { const r = await sendPayload(chat, u.pt, extra); delete job.uploaded; return r; }
+    catch (e) { if (e && e.absent) { delete job.uploaded; await sb.storage.from('chat-files').remove([u.path]).catch(() => {}); } throw e; }
+  }
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
   const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
   if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
@@ -1161,8 +1167,10 @@ async function sendFile(chat, file, extra, caption, fw, job) {
   const pl = { v: 1, t: '', f }; if (caption) pl.caption = String(caption).slice(0, 4000); if (fw) pl.fw = fw;
   if (job) {
     try { return await sendPayload(chat, JSON.stringify(pl), extra); }
-    catch (e) { // вставка не прошла (и это не «уже на сервере») — объект в Storage не оставляем; повтор загрузит заново
-      await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e;
+    catch (e) { // объект удаляем, только если проверка подтвердила, что строки нет; иначе оставляем и повтор использует тот же путь
+      if (e && e.absent) await sb.storage.from('chat-files').remove([path]).catch(() => {});
+      else job.uploaded = { path, pt: JSON.stringify(pl) };
+      throw e;
     }
   }
   try { return await sendPayload(chat, JSON.stringify(pl), extra); }
