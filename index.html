@@ -5,15 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cut">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#0f1720">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: blob: https://tbbaztmtkcrzxnkkmtqv.supabase.co; connect-src 'self' https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; base-uri 'none'; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: blob: https://tbbaztmtkcrzxnkkmtqv.supabase.co; connect-src 'self' https://tbbaztmtkcrzxnkkmtqv.supabase.co wss://tbbaztmtkcrzxnkkmtqv.supabase.co; font-src 'self'; base-uri 'none'; form-action 'none';">
 <title>Мессенджер</title>
 <link rel="icon" href="data:,">
+<link rel="preload" href="fonts/material-symbols-rounded.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="tokens.css?v=20261015b">
 <script src="theme.js?v=20261015b"></script>
-<link rel="stylesheet" href="style.css?v=20261015j">
+<link rel="stylesheet" href="style.css?v=20261015k">
 </head>
 <body>
-<div id="notice" role="alert" hidden><span id="noticeText"></span><button type="button" id="noticeClose" aria-label="Закрыть">✕</button></div>
+<div id="notice" role="alert" hidden><span id="noticeText"></span><button type="button" id="noticeClose" aria-label="Закрыть"><span class="ms" aria-hidden="true">close</span></button></div>
 <section id="auth" class="screen">
   <div class="card">
     <h1>Мессенджер</h1>
@@ -55,75 +56,97 @@
   </aside>
   <main id="chatPane">
     <header id="chatHead" class="bar">
-      <button type="button" id="backBtn" class="icon back" aria-label="Назад к чатам">←</button>
+      <button type="button" id="backBtn" class="icon back" aria-label="Назад к чатам"><span class="ms" aria-hidden="true">arrow_back</span></button>
       <button type="button" id="peerBtn" class="peer"><span id="chatAva" class="ava" hidden></span><span class="titles"><span id="chatTitle">Выберите чат</span><small id="chatSub"></small></span></button>
-      <button type="button" id="safetyBtn" class="link" hidden>🔒 Код безопасности</button>
-      <button type="button" id="chatMenuBtn" class="icon" aria-label="Меню чата" title="Меню чата" hidden>⋮</button>
+      <button type="button" id="safetyBtn" class="link" hidden>Код безопасности</button>
+      <button type="button" id="chatMenuBtn" class="icon" aria-label="Меню чата" title="Меню чата" hidden><span class="ms" aria-hidden="true">more_vert</span></button>
     </header>
-    <div id="pinBar" hidden><span class="pin-line"></span><button type="button" id="pinOpen" class="pin-text"><b id="pinLabel">Закреплённое сообщение</b><span id="pinPreview"></span></button><button type="button" id="unpinBtn" class="icon" aria-label="Открепить" title="Открепить">✕</button></div>
+    <div id="pinBar" hidden><span class="pin-line"></span><button type="button" id="pinOpen" class="pin-text"><b id="pinLabel">Закреплённое сообщение</b><span id="pinPreview"></span></button><button type="button" id="unpinBtn" class="icon" aria-label="Открепить" title="Открепить"><span class="ms" aria-hidden="true">close</span></button></div>
     <div id="messages"><button type="button" id="olderBtn" class="ghost older" hidden>Загрузить более ранние сообщения</button><p class="empty-state">Выберите чат слева или найдите собеседника по никнейму.</p></div>
-    <button type="button" id="jumpBtn" class="jump" aria-label="Вниз к последним сообщениям" title="Вниз" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span id="jumpCount" hidden></span></button>
-    <div id="composeBar" hidden><span id="composeIcon">↩</span><div class="cb-text"><b id="composeTitle"></b><span id="composePreview"></span></div><button type="button" id="composeCancel" class="icon" aria-label="Отменить" title="Отменить">✕</button></div>
+    <button type="button" id="jumpBtn" class="jump" aria-label="Вниз к последним сообщениям" title="Вниз" hidden><span class="ms" aria-hidden="true">keyboard_arrow_down</span><span id="jumpCount" hidden></span></button>
+    <div id="composeBar" hidden><span id="composeIcon" class="ms" aria-hidden="true">reply</span><div class="cb-text"><b id="composeTitle"></b><span id="composePreview"></span></div><button type="button" id="composeCancel" class="icon" aria-label="Отменить" title="Отменить"><span class="ms" aria-hidden="true">close</span></button></div>
     <form id="sendForm" hidden>
-      <button type="button" id="attachBtn" class="icon" title="Отправить файл (до 25 МБ, со сквозным шифрованием)" aria-label="Прикрепить файл">📎</button>
+      <button type="button" id="attachBtn" class="icon" title="Отправить файл (до 25 МБ, со сквозным шифрованием)" aria-label="Прикрепить файл"><span class="ms" aria-hidden="true">attach_file</span></button>
       <input type="file" id="fileInput" hidden>
       <input id="msgInput" maxlength="4000" placeholder="Сообщение" autocomplete="off">
-      <button type="submit" id="sendBtn" aria-label="Отправить">➤</button>
+      <button type="submit" id="sendBtn" aria-label="Отправить"><span class="ms" aria-hidden="true">send</span></button>
     </form>
   </main>
   <section id="settings" class="page" aria-label="Настройки">
-    <header class="bar"><button type="button" id="settingsBack" class="icon back" aria-label="Назад">←</button><b id="pageTitle">Настройки</b><span></span></header>
+    <header class="bar"><button type="button" id="settingsBack" class="icon back" aria-label="Назад"><span class="ms" aria-hidden="true">arrow_back</span></button><b id="pageTitle">Настройки</b><button type="button" id="editBtn" class="icon" aria-label="Изменить профиль" title="Изменить" hidden><span class="ms" aria-hidden="true">edit</span></button></header>
     <div class="page-body">
-      <div class="group" data-tab="profile">
-        <h3>Профиль</h3>
-        <div class="prof-top">
-          <span id="profAva" class="ava xl"></span>
-          <div class="prof-actions">
-            <button type="button" id="avaPhotoBtn">Фото из файла</button>
+      <div class="group-wrap" data-tab="profile">
+        <div class="profile-head">
+          <div class="profile-head__avatar"><span id="profAva" class="ava xl"></span><button type="button" id="avaPhotoBtn" class="cam" aria-label="Загрузить фото" title="Фото (JPEG, PNG, WebP, GIF до 2 МБ)"><span class="ms" aria-hidden="true">photo_camera</span></button></div>
+          <input type="file" id="avaFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+          <div class="profile-head__name" id="profName"></div>
+          <div class="profile-head__status">в сети</div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group__title">Информация</div>
+          <div class="settings-row info-row"><span class="settings-row__icon" aria-hidden="true">alternate_email</span><span class="settings-row__label"><span id="profNick"></span><small>Имя пользователя</small></span></div>
+          <div class="settings-row info-row"><span class="settings-row__icon" aria-hidden="true">info</span><span class="settings-row__label"><span id="profBio"></span><small>О себе</small></span></div>
+        </div>
+        <p id="extNote" class="hint small pad" hidden>Сервер пока не поддерживает фото, цвет и «о себе». Имя и никнейм менять можно.</p>
+        <div class="settings-group edit-card" id="editCard" hidden>
+          <div class="settings-group__title">Редактирование</div>
+          <div class="edit-body">
+          <form id="profForm" novalidate>
+            <label for="pName">Имя</label><input id="pName" maxlength="64" required>
+            <label for="pNick">Никнейм</label><input id="pNick" maxlength="32" pattern="[a-z0-9_]{3,32}" autocapitalize="off" required>
+            <p class="hint small">3–32 символа: a-z, 0-9 и _</p>
+            <label for="pBio">О себе</label><textarea id="pBio" maxlength="300" rows="3"></textarea>
+            <p class="hint small counter"><span id="bioCount">0</span>/300</p>
+            <label for="pLetter">Буквы на аватаре (1–2 символа, пусто — первая буква имени)</label><input id="pLetter" maxlength="2" autocomplete="off" class="short">
+            <label>Цвет фона</label>
+            <div id="colorRow" class="colors"></div>
             <button type="button" id="avaRemoveBtn" class="ghost">Убрать фото</button>
-            <input type="file" id="avaFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+            <button type="submit" id="profSave">Сохранить</button>
+          </form>
           </div>
         </div>
-        <label for="pLetter">Буква на аватаре (1–2 символа, пусто — первая буква имени)</label><input id="pLetter" maxlength="4" autocomplete="off" class="short">
-        <label>Цвет фона</label>
-        <div id="colorRow" class="colors"></div>
-        <p id="extNote" class="hint small" hidden>Сервер пока не поддерживает фото, цвет и «о себе». Имя и никнейм менять можно.</p>
-        <form id="profForm" novalidate>
-          <label for="pName">Имя</label><input id="pName" maxlength="64" required>
-          <label for="pNick">Никнейм</label><input id="pNick" maxlength="32" pattern="[a-z0-9_]{3,32}" autocapitalize="off" required>
-          <p class="hint small">3–32 символа: a-z, 0-9 и _</p>
-          <label for="pBio">О себе</label><textarea id="pBio" maxlength="300" rows="3"></textarea>
-          <p class="hint small"><span id="bioCount">0</span>/300</p>
-          <button type="submit" id="profSave">Сохранить</button>
-          <p id="profMsg" class="hint" aria-live="polite"></p>
-        </form>
+        <p id="profMsg" class="hint pad" aria-live="polite"></p>
       </div>
-      <div class="group" data-tab="settings">
-        <h3>Оформление</h3>
-        <div class="seg" id="themeSeg" role="radiogroup">
-          <button type="button" data-mode="system">Как в системе</button><button type="button" data-mode="dark">Тёмная</button><button type="button" data-mode="light">Светлая</button>
+      <div class="group-wrap" data-tab="settings">
+        <button type="button" id="miniHead" class="mini-head"><span id="miniAva" class="ava"></span><span><b id="miniName"></b><small id="miniNick"></small></span></button>
+        <div class="settings-group">
+          <div class="settings-group__title">Аккаунт</div>
+          <button type="button" class="settings-row" id="rowProfile"><span class="settings-row__icon" aria-hidden="true">person</span><span class="settings-row__label">Профиль</span></button>
+          <button type="button" class="settings-row" id="rowSeen"><span class="settings-row__icon" aria-hidden="true">lock</span><span class="settings-row__label">Кто видит время в сети</span><span class="settings-row__value" id="seenVal"></span></button>
+          <div class="row-extra" id="seenBox" hidden>
+            <div class="seg" id="seenSeg" role="radiogroup"><button type="button" data-v="everyone">Все</button><button type="button" data-v="contacts">Мои контакты</button><button type="button" data-v="nobody">Никто</button></div>
+            <p class="hint small" id="seenMsg">«Мои контакты» — те, с кем у вас есть личный чат. Если вы скрываете время, собеседники видят «был(а) недавно».</p>
+          </div>
+          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">devices</span><span class="settings-row__label">Устройство шифрования</span><code class="settings-row__value" id="setDevice">—</code></button>
+          <button type="button" class="settings-row" id="rowE2E"><span class="settings-row__icon" aria-hidden="true">key</span><span class="settings-row__label">Шифрование</span><span class="settings-row__value">Signal, сквозное</span></button>
         </div>
-      </div>
-      <div class="group" data-tab="settings">
-        <h3>Конфиденциальность</h3>
-        <label>Кто видит, когда я был(а) в сети</label>
-        <div class="seg" id="seenSeg" role="radiogroup"><button type="button" data-v="everyone">Все</button><button type="button" data-v="contacts">Мои контакты</button><button type="button" data-v="nobody">Никто</button></div>
-        <p class="hint small" id="seenMsg">«Мои контакты» — те, с кем у вас есть личный чат. Если вы скрываете время, собеседники видят «был(а) недавно».</p>
-      </div>
-      <div class="group" data-tab="settings">
-        <h3>Это устройство</h3>
-        <p class="hint">Почта: <span id="setEmail"></span></p>
-        <p class="hint">Устройство шифрования: <code id="setDevice">—</code></p>
-        <p class="hint">Все сообщения и файлы шифруются сквозным шифрованием (Signal). Профиль (имя, ник, «о себе», аватар) виден всем пользователям мессенджера и не шифруется.</p>
-        <button type="button" id="logout" class="danger">Выйти на этом устройстве</button>
-        <p id="buildInfo" class="hint small"></p>
+        <div class="settings-group">
+          <div class="settings-group__title">Оформление</div>
+          <button type="button" class="settings-row" id="rowTheme"><span class="settings-row__icon" aria-hidden="true">palette</span><span class="settings-row__label">Тема</span><span class="settings-row__value" id="themeVal"></span></button>
+          <div class="row-extra" id="themeBox" hidden><div class="seg" id="themeSeg" role="radiogroup"><button type="button" data-mode="system">Системная</button><button type="button" data-mode="light">Светлая</button><button type="button" data-mode="dark">Тёмная</button></div></div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group__title">Уведомления</div>
+          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">notifications</span><span class="settings-row__label">Уведомления</span><span class="settings-row__value">в открытой вкладке</span></button>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group__title">Данные</div>
+          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">mail</span><span class="settings-row__label">Почта</span><span class="settings-row__value" id="setEmail"></span></button>
+          <button type="button" class="settings-row" tabindex="-1"><span class="settings-row__icon" aria-hidden="true">language</span><span class="settings-row__label">Язык</span><span class="settings-row__value">Русский</span></button>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group__title">Прочее</div>
+          <button type="button" class="settings-row" id="rowHelp"><span class="settings-row__icon" aria-hidden="true">help</span><span class="settings-row__label">Помощь</span><span class="settings-row__value">о шифровании</span></button>
+          <button type="button" class="settings-row settings-row--color-danger" id="logout"><span class="settings-row__icon" aria-hidden="true">logout</span><span class="settings-row__label">Выйти</span></button>
+        </div>
+        <p id="buildInfo" class="build-label"></p>
       </div>
     </div>
   </section>
   <nav id="bottomNav" aria-label="Разделы">
-    <button type="button" data-nav="chats" aria-label="Чаты" title="Чаты"><span class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg></span></button>
-    <button type="button" data-nav="profile" aria-label="Профиль" title="Профиль"><span class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></span></button>
-    <button type="button" data-nav="settings" aria-label="Настройки" title="Настройки"><span class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></span></button>
+    <button type="button" data-nav="chats" aria-label="Чаты" title="Чаты"><span class="pill"><span class="ms" aria-hidden="true">chat</span></span></button>
+    <button type="button" data-nav="profile" aria-label="Профиль" title="Профиль"><span class="pill"><span class="ms" aria-hidden="true">person</span></span></button>
+    <button type="button" data-nav="settings" aria-label="Настройки" title="Настройки"><span class="pill"><span class="ms" aria-hidden="true">settings</span></span></button>
   </nav>
 </section>
 <div id="ctxMenu" role="menu" hidden></div>
@@ -158,6 +181,6 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script src="build.js?v=7bb8893"></script>
 <script src="config.js?v=20261015b"></script>
-<script src="app.js?v=20261015n"></script>
+<script src="app.js?v=20261015o"></script>
 </body>
 </html>

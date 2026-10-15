@@ -198,12 +198,12 @@ async function loadChats() {
   ul.innerHTML = '';
   if (showArchive) {
     const li = document.createElement('li'); li.className = 'archive-row'; li.tabIndex = 0;
-    const ava = avatarEl({ display_name: '←', id: 'x' }); txt(ava, '←');
+    const ava = avatarEl({ display_name: '←', id: 'x' }); txt(ava, 'arrow_back'); ava.classList.add('ms');
     const meta = document.createElement('div'); meta.className = 'meta'; const nm = document.createElement('div'); nm.className = 'name'; txt(nm, 'Архив'); const sub = document.createElement('div'); sub.className = 'sub'; txt(sub, 'Назад ко всем чатам'); meta.append(nm, sub);
     li.append(ava, meta); li.onclick = () => { showArchive = false; loadChats(); }; ul.append(li);
   } else if (archived.length) {
     const li = document.createElement('li'); li.className = 'archive-row'; li.tabIndex = 0; li.dataset.archive = '1';
-    const ava = avatarEl({ display_name: '🗄', id: 'x' }); txt(ava, '🗄');
+    const ava = avatarEl({ display_name: '🗄', id: 'x' }); txt(ava, 'archive'); ava.classList.add('ms');
     const meta = document.createElement('div'); meta.className = 'meta'; const nm = document.createElement('div'); nm.className = 'name'; txt(nm, 'Архив'); const sub = document.createElement('div'); sub.className = 'sub'; txt(sub, archived.length + ' ' + plural(archived.length, 'чат', 'чата', 'чатов')); meta.append(nm, sub);
     li.append(ava, meta);
     const un = archived.reduce((s, c) => s + (c.unread || 0), 0);
@@ -222,9 +222,9 @@ async function loadChats() {
     const side = document.createElement('div'); side.className = 'side-col';
     const tm = document.createElement('span'); tm.className = 'time'; txt(tm, c.last_sender ? fmtListTime(c.last_at) : ''); side.append(tm);
     const fl = document.createElement('span'); fl.className = 'flags';
-    if (isMuted(c)) { const s = document.createElement('span'); s.title = 'Без звука'; txt(s, '🔕'); fl.append(s); }
+    if (isMuted(c)) { const s = document.createElement('span'); s.title = 'Без звука'; s.className = 'ms s'; txt(s, 'notifications_off'); fl.append(s); }
     if (c.unread > 0 && !(currentChat && currentChat.id === c.id)) { li.classList.add('unread'); const b = document.createElement('span'); b.className = 'badge' + (isMuted(c) ? ' muted' : ''); txt(b, c.unread > 99 ? '99+' : String(c.unread)); fl.append(b); }
-    else if (c.pinned) { const s = document.createElement('span'); s.className = 'pin-flag'; s.title = 'Закреплён'; txt(s, '📌'); fl.append(s); }
+    else if (c.pinned) { const s = document.createElement('span'); s.className = 'pin-flag ms s'; s.title = 'Закреплён'; txt(s, 'push_pin'); fl.append(s); }
     side.append(fl); li.append(side);
     if (currentChat && currentChat.id === c.id) li.classList.add('active');
     li.onclick = () => openChat(c, li);
@@ -242,13 +242,13 @@ function chatMenuItems(c) {
   const muted = isMuted(c), H = 3600e3;
   const mute = until => () => chatPrefs(c, { p_muted_until: until }, 'Уведомления отключены');
   return [
-    { t: c.pinned ? 'Открепить' : 'Закрепить', i: '📌', f: () => chatPrefs(c, { p_pinned: !c.pinned }, c.pinned ? 'Чат откреплён' : 'Чат закреплён') },
-    ...(muted ? [{ t: 'Включить звук', i: '🔔', f: () => chatPrefs(c, { p_unmute: true }, 'Звук включён') }] : [
-      { t: 'Без звука на 1 час', i: '🔕', f: mute(new Date(Date.now() + H).toISOString()) },
-      { t: 'Без звука на 8 часов', i: '🔕', f: mute(new Date(Date.now() + 8 * H).toISOString()) },
-      { t: 'Без звука на 1 день', i: '🔕', f: mute(new Date(Date.now() + 24 * H).toISOString()) },
-      { t: 'Без звука навсегда', i: '🔕', f: mute('9999-12-31T00:00:00Z') }]),
-    { t: c.archived ? 'Вернуть из архива' : 'В архив', i: '🗄', f: () => chatPrefs(c, { p_archived: !c.archived }, c.archived ? 'Чат возвращён из архива' : 'Чат перенесён в архив') }
+    { t: c.pinned ? 'Открепить' : 'Закрепить', i: 'push_pin', f: () => chatPrefs(c, { p_pinned: !c.pinned }, c.pinned ? 'Чат откреплён' : 'Чат закреплён') },
+    ...(muted ? [{ t: 'Включить звук', i: 'notifications', f: () => chatPrefs(c, { p_unmute: true }, 'Звук включён') }] : [
+      { t: 'Без звука на 1 час', i: 'notifications_off', f: mute(new Date(Date.now() + H).toISOString()) },
+      { t: 'Без звука на 8 часов', i: 'notifications_off', f: mute(new Date(Date.now() + 8 * H).toISOString()) },
+      { t: 'Без звука на 1 день', i: 'notifications_off', f: mute(new Date(Date.now() + 24 * H).toISOString()) },
+      { t: 'Без звука навсегда', i: 'notifications_off', f: mute('9999-12-31T00:00:00Z') }]),
+    { t: c.archived ? 'Вернуть из архива' : 'В архив', i: c.archived ? 'unarchive' : 'archive', f: () => chatPrefs(c, { p_archived: !c.archived }, c.archived ? 'Чат возвращён из архива' : 'Чат перенесён в архив') }
   ];
 }
 async function chatPrefs(c, args, done) {
@@ -265,7 +265,7 @@ function openMenu(e, items) {
   for (const it of items) {
     if (it === '-') { const s = document.createElement('div'); s.className = 'sep'; m.append(s); continue; }
     const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); if (it.danger) b.className = 'danger-item';
-    const ic = document.createElement('span'); ic.setAttribute('aria-hidden', 'true'); txt(ic, it.i || ''); const tx = document.createElement('span'); txt(tx, it.t);
+    const ic = document.createElement('span'); ic.setAttribute('aria-hidden', 'true'); ic.className = 'ms'; txt(ic, it.i || ''); const tx = document.createElement('span'); txt(tx, it.t);
     b.append(ic, tx); b.dataset.act = it.t;
     b.onclick = () => { closeMenu(); Promise.resolve().then(it.f).catch(err => alert(err.userMsg || ruErr(err))); };
     m.append(b);
@@ -444,7 +444,7 @@ async function renderMsg(m, d) {
     q.onclick = ev => { ev.stopPropagation(); jumpTo(m.reply_to); };
     d.insertBefore(q, b);
   }
-  if (pins.includes(m.id)) { const p = document.createElement('span'); p.className = 'pinned-ico'; p.title = 'Закреплено'; txt(p, '📌'); foot.append(p); }
+  if (pins.includes(m.id)) { const p = document.createElement('span'); p.className = 'pinned-ico ms s'; p.title = 'Закреплено'; txt(p, 'push_pin'); foot.append(p); }
   if (m.edited_at) { const e = document.createElement('span'); txt(e, 'изм.'); foot.append(e); }
   const tm = document.createElement('time'); tm.dateTime = m.created_at; txt(tm, fmtTime(m.created_at));
   foot.append(lock, tm);
@@ -527,14 +527,14 @@ function jumpTo(id) {
 function msgMenuItems(id) {
   const x = msgData[id]; if (!x) return [];
   const m = x.m, mine = m.sender_id === me.id, items = [];
-  items.push({ t: 'Ответить', i: '↩', f: () => startReply(id) });
+  items.push({ t: 'Ответить', i: 'reply', f: () => startReply(id) });
   for (const e of REACT_EMOJI) { const had = (reacts[id] || []).some(r => r.user_id === me.id && r.emoji === e); items.push({ t: (had ? 'Убрать ' : 'Реакция ') + e, i: e, f: () => toggleReact(id, e) }); }
   items.push('-');
-  if (x.pl) items.push({ t: 'Переслать', i: '↪', f: () => openForward(id) });
-  if (canPin()) items.push(pins.includes(id) ? { t: 'Открепить', i: '📌', f: () => pinMsg(id, false) } : { t: 'Закрепить', i: '📌', f: () => pinMsg(id, true) });
-  if (mine && x.pl && !x.pl.f && m.ciphertext) items.push({ t: 'Изменить', i: '✏️', f: () => startEdit(id) });
-  if (x.pl && x.pl.t) items.push({ t: 'Копировать текст', i: '📋', f: () => navigator.clipboard.writeText(x.pl.t).then(() => toast('Текст скопирован')) });
-  if (mine) items.push('-', { t: 'Удалить у всех', i: '🗑', danger: true, f: () => deleteMsg(id) });
+  if (x.pl) items.push({ t: 'Переслать', i: 'forward', f: () => openForward(id) });
+  if (canPin()) items.push(pins.includes(id) ? { t: 'Открепить', i: 'push_pin', f: () => pinMsg(id, false) } : { t: 'Закрепить', i: 'push_pin', f: () => pinMsg(id, true) });
+  if (mine && x.pl && !x.pl.f && m.ciphertext) items.push({ t: 'Изменить', i: 'edit', f: () => startEdit(id) });
+  if (x.pl && x.pl.t) items.push({ t: 'Копировать текст', i: 'content_copy', f: () => navigator.clipboard.writeText(x.pl.t).then(() => toast('Текст скопирован')) });
+  if (mine) items.push('-', { t: 'Удалить у всех', i: 'delete', danger: true, f: () => deleteMsg(id) });
   return items;
 }
 function wireMsg(d) {
@@ -555,13 +555,13 @@ function startReply(id) {
   if (!msgData[id]) return;
   editing = null; replyTo = id;
   const x = msgData[id];
-  txt($('composeIcon'), '↩'); txt($('composeTitle'), 'В ответ ' + (x.m.sender_id === me.id ? 'себе' : (profiles[x.m.sender_id] ? displayName(profiles[x.m.sender_id]) : ''))); txt($('composePreview'), previewOf(id));
+  txt($('composeIcon'), 'reply'); txt($('composeTitle'), 'В ответ ' + (x.m.sender_id === me.id ? 'себе' : (profiles[x.m.sender_id] ? displayName(profiles[x.m.sender_id]) : ''))); txt($('composePreview'), previewOf(id));
   $('composeBar').hidden = false; $('msgInput').focus();
 }
 function startEdit(id) {
   const x = msgData[id]; if (!x || !x.pl) return;
   replyTo = null; editing = id;
-  txt($('composeIcon'), '✏️'); txt($('composeTitle'), 'Редактирование'); txt($('composePreview'), x.pl.t);
+  txt($('composeIcon'), 'edit'); txt($('composeTitle'), 'Редактирование'); txt($('composePreview'), x.pl.t);
   $('composeBar').hidden = false; $('msgInput').value = x.pl.t; $('msgInput').focus();
 }
 function cancelCompose() { if (editing) $('msgInput').value = ''; replyTo = null; editing = null; $('composeBar').hidden = true; }
@@ -726,7 +726,7 @@ function onTyping(p) {
 }
 
 // ---------- кто видит «был(а) в сети» ----------
-function paintSeenSeg(v) { document.querySelectorAll('#seenSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
+function paintSeenSeg(v) { txt($('seenVal'), { everyone: 'Все', contacts: 'Мои контакты', nobody: 'Никто' }[v] || ''); document.querySelectorAll('#seenSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v))); }
 document.querySelectorAll('#seenSeg button').forEach(b => {
   b.onclick = async () => {
     const { error } = await sb.from('profiles').update({ last_seen_visibility: b.dataset.v }).eq('id', me.id);
@@ -973,10 +973,10 @@ $('fileInput').onchange = async () => {
   const file = $('fileInput').files[0]; $('fileInput').value = '';
   if (!file || !currentChat) return;
   if (file.size <= 0 || file.size > MAX_FILE) return alert('Файл пустой или больше 25 МБ');
-  const chat = currentChat, btn = $('attachBtn'); btn.disabled = true; txt(btn, '⏳');
+  const chat = currentChat, btn = $('attachBtn'); btn.disabled = true; btn.firstElementChild.textContent = 'hourglass_empty';
   try { await sendFile(chat, file); }
   catch (e) { alert(e.userMsg || ruErr(e)); }
-  finally { btn.disabled = false; txt(btn, '📎'); }
+  finally { btn.disabled = false; btn.firstElementChild.textContent = 'attach_file'; }
 };
 async function sendFile(chat, file, extra, caption, fw) {
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
@@ -1011,7 +1011,7 @@ async function downloadFile(f, fromOther) {
 }
 
 // ---------- код безопасности ----------
-function safetyLabel() { if (peerId && E2E) txt($('safetyBtn'), E2E.hasPendingChange(peerId) ? '⚠ Ключ изменился' : E2E.isVerified(peerId) ? '🔒 Код проверен ✅' : '🔒 Код безопасности'); }
+function safetyLabel() { if (peerId && E2E) txt($('safetyBtn'), E2E.hasPendingChange(peerId) ? 'Ключ изменился' : E2E.isVerified(peerId) ? 'Код проверен' : 'Код безопасности'); }
 async function showSafety() {
   const peer = peerId; if (!peer) return;
   const nums = await E2E.safetyNumbers(peer);
@@ -1090,6 +1090,7 @@ function applyTheme(t) {
   if (THEMES[t]) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
   try { t === 'system' ? localStorage.removeItem('msgr-theme') : localStorage.setItem('msgr-theme', t); } catch { /* нет localStorage */ }
   document.querySelectorAll('#themeSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === t)));
+  const tv = $('themeVal'); if (tv) txt(tv, { system: 'Системная', light: 'Светлая', dark: 'Тёмная' }[t]);
   const dark = THEMES[t] ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
   document.querySelector('meta[name=theme-color]').content = dark ? '#0f1720' : '#eef2f6';
 }
@@ -1100,13 +1101,15 @@ let tab = 'chats';
 function setNav(t) { tab = t; document.querySelectorAll('#bottomNav button').forEach(b => { if (b.dataset.nav === t) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }); }
 function openSettings(push = true, which = 'settings') {
   $('app').classList.add('in-settings');
-  document.querySelectorAll('#settings .group').forEach(g => { g.hidden = g.dataset.tab !== which; });
+  document.querySelectorAll('#settings .group-wrap').forEach(g => { g.hidden = g.dataset.tab !== which; });
+  $('editBtn').hidden = which !== 'profile'; $('editCard').hidden = true;
   txt($('pageTitle'), which === 'profile' ? 'Профиль' : 'Настройки');
   setNav(which);
   if (push && location.hash !== '#' + which) history.pushState({ v: which }, '', '#' + which);
   if (which === 'profile') fillSettings().catch(e => showErr('Не удалось загрузить профиль: ' + ruErr(e)));
   else { getProfile(me.id, true).then(p => paintSeenSeg((p && p.last_seen_visibility) || 'everyone'));
     txt($('buildInfo'), 'Сборка ' + (window.BUILD ? BUILD.commit + ' · ' + BUILD.date : 'неизвестна'));
+    getProfile(me.id).then(paintMini);
     txt($('setEmail'), me.email || '—'); txt($('setDevice'), E2E && E2E.deviceId() ? E2E.deviceId().slice(0, 8) : '—'); }
 }
 function closeSettings() { $('app').classList.remove('in-settings'); setNav('chats'); maybeMarkRead(); }
@@ -1127,10 +1130,10 @@ window.addEventListener('popstate', () => {
 async function fillSettings() {
   const p = await getProfile(me.id, true);
   if (!p) throw new Error('профиль не найден');
-  $('pName').value = p.display_name || ''; $('pNick').value = p.username || ''; $('pBio').value = p.bio || ''; $('pLetter').value = p.avatar_letter || ''; $('pLetter').disabled = !profileExt; txt($('bioCount'), String($('pBio').value.length));
+  $('pName').value = p.display_name || ''; $('pNick').value = p.username || ''; $('pBio').value = cleanBio(p.bio || ''); $('pLetter').value = p.avatar_letter || ''; $('pLetter').disabled = !profileExt; paintBioCount(); paintProfHead(p);
   pickedColor = p.avatar_color || null;
   const ext = !!profileExt;
-  $('extNote').hidden = ext; $('pBio').disabled = !ext; $('avaPhotoBtn').disabled = !ext; $('avaRemoveBtn').hidden = !p.avatar_url;
+  $('extNote').hidden = ext; $('pBio').disabled = !ext; $('avaPhotoBtn').disabled = !ext; $('avaRemoveBtn').hidden = !p.avatar_url; $('avaPhotoBtn').hidden = !ext;
   const row = $('colorRow'); row.textContent = '';
   for (const col of COLORS) {
     const b = document.createElement('button'); b.type = 'button'; b.style.background = col; b.title = col; b.disabled = !ext;
@@ -1141,16 +1144,26 @@ async function fillSettings() {
   fillAvatar($('profAva'), p); txt($('profMsg'), '');
 }
 $('pLetter').oninput = () => { const p = profiles[me.id]; if (p) fillAvatar($('profAva'), { ...p, avatar_url: null, avatar_color: pickedColor || p.avatar_color, avatar_letter: $('pLetter').value.trim() || null }); };
-$('pBio').oninput = () => txt($('bioCount'), String($('pBio').value.length));
+/** «О себе»: без управляющих символов (кроме перевода строки), не больше 300 — как проверяет сервер */
+function cleanBio(s) { return Array.from(String(s).replace(/\r\n?/g, '\n').replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, c => c === '\n' ? c : '')).join('').slice(0, 300); }
+function paintBioCount() { const n = $('pBio').value.length; txt($('bioCount'), String(n)); $('bioCount').parentNode.classList.toggle('bad', n >= 280); }
+$('pBio').oninput = () => { const v = cleanBio($('pBio').value); if (v !== $('pBio').value) $('pBio').value = v; paintBioCount(); };
+function paintProfHead(p) { txt($('profName'), displayName(p)); txt($('profNick'), '@' + (p.username || '')); txt($('profBio'), p.bio || 'Не указано'); paintMini(p); }
+function paintMini(p) { if (!p) return; fillAvatar($('miniAva'), p); txt($('miniName'), displayName(p)); txt($('miniNick'), '@' + (p.username || '')); }
+$('editBtn').onclick = () => { $('editCard').hidden = !$('editCard').hidden; if (!$('editCard').hidden) $('pName').focus(); };
+$('miniHead').onclick = $('rowProfile').onclick = () => openSettings(true, 'profile');
+$('rowSeen').onclick = () => { $('seenBox').hidden = !$('seenBox').hidden; };
+$('rowTheme').onclick = () => { $('themeBox').hidden = !$('themeBox').hidden; };
+$('rowE2E').onclick = $('rowHelp').onclick = () => toast('Сообщения и файлы шифруются на устройстве (Signal). Сервер их не видит. Профиль виден всем и не шифруется.');
 $('pNick').oninput = () => { $('pNick').value = $('pNick').value.toLowerCase(); };
 $('profForm').onsubmit = async e => {
   e.preventDefault();
-  const name = $('pName').value.trim().replace(/\s+/g, ' '), nick = normNick($('pNick').value), bio = $('pBio').value.trim();
+  const name = $('pName').value.trim().replace(/\s+/g, ' '), nick = normNick($('pNick').value), bio = cleanBio($('pBio').value).trim();
   if (!name || name.length > 64) return txt($('profMsg'), 'Имя: от 1 до 64 символов');
   if (!/^[a-z0-9_]{3,32}$/.test(nick)) return txt($('profMsg'), 'Никнейм: 3–32 символа, только a-z, 0-9 и _');
   const upd = { display_name: name, username: nick };
   if (profileExt) {
-    upd.bio = bio || null; if (pickedColor) upd.avatar_color = pickedColor;
+    upd.bio = bio || null; if (pickedColor && /^#[0-9a-fA-F]{6}$/.test(pickedColor)) upd.avatar_color = pickedColor;
     const letter = $('pLetter').value.trim();
     if (letter && (Array.from(letter).length > 2 || /[\s\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(letter))) return txt($('profMsg'), 'Буква аватара: 1–2 символа без пробелов');
     upd.avatar_letter = letter || null;
@@ -1159,19 +1172,19 @@ $('profForm').onsubmit = async e => {
   try {
     const { error } = await sb.from('profiles').update(upd).eq('id', me.id);
     if (error) throw error;
-    await refreshMe(); txt($('profMsg'), '✅ Сохранено');
+    await refreshMe(); $('editCard').hidden = true; txt($('profMsg'), ''); toast('Сохранено');
   } catch (err) { txt($('profMsg'), ruErr(err)); }
   finally { $('profSave').disabled = false; }
 };
 async function refreshMe() {
   const p = await getProfile(me.id, true);
-  txt($('me'), displayName(p)); fillAvatar($('meAva'), p); fillAvatar($('profAva'), p); $('avaRemoveBtn').hidden = !(p && p.avatar_url);
+  txt($('me'), displayName(p)); fillAvatar($('meAva'), p); fillAvatar($('profAva'), p); $('avaRemoveBtn').hidden = !(p && p.avatar_url); if (p) paintProfHead(p);
 }
 $('avaPhotoBtn').onclick = () => $('avaFile').click();
 $('avaFile').onchange = async () => {
   const f = $('avaFile').files[0]; $('avaFile').value = ''; if (!f) return;
-  if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) return txt($('profMsg'), 'Нужна картинка PNG, JPEG, WebP или GIF');
-  if (f.size > 20 * 1024 * 1024) return txt($('profMsg'), 'Картинка больше 20 МБ');
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) return toast('Нужна картинка JPEG, PNG, WebP или GIF');
+  if (f.size > 2 * 1024 * 1024) return toast('Файл больше 2 МБ');
   $('avaPhotoBtn').disabled = true; txt($('profMsg'), 'Загружаем фото…');
   try {
     const blob = await squareImage(f, 256);

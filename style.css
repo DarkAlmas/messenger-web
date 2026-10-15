@@ -237,3 +237,37 @@ button{border-radius:var(--radius-button)}
 .msg.mine .react{color:var(--bubble-out-text);background:rgba(255,255,255,.18);border-color:transparent}
 .msg.mine .react.mine{border-color:rgba(255,255,255,.5)}
 #buildInfo{text-align:center;margin-top:12px;user-select:all}
+/* Material Symbols Rounded (Google, Apache 2.0), самохостинг: подмножество нужных значков */
+@font-face{font-family:'Material Symbols Rounded';font-style:normal;font-weight:400;font-display:block;src:url(fonts/material-symbols-rounded.woff2) format('woff2')}
+.ms,.settings-row__icon{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;word-wrap:normal;direction:ltr;font-feature-settings:'liga';-webkit-font-smoothing:antialiased;user-select:none;overflow:hidden;flex:none}
+.ms.s{font-size:16px;vertical-align:-3px}
+.ava.ms{font-family:'Material Symbols Rounded';font-weight:normal;font-size:24px}
+#ctxMenu .ms{font-size:20px;width:20px;color:var(--color-text-secondary)}#ctxMenu button.danger-item .ms{color:var(--color-danger)}
+#composeIcon{color:var(--color-primary)}
+#bottomNav .ms{font-size:24px}
+/* Профиль и настройки (docs/design/settings_profile.md) */
+.settings-group{background:var(--color-surface-container);border-radius:16px;margin:0 auto 12px;max-width:620px;overflow:hidden}
+.settings-group__title{font-size:14px;font-weight:500;color:var(--color-primary);padding:16px 16px 8px}
+.settings-row{display:flex;align-items:center;width:100%;min-height:56px;padding:0 16px;gap:16px;cursor:pointer;background:none;color:var(--color-text);border:0;border-radius:0;text-align:left;font:inherit;box-sizing:border-box}
+button.settings-row:hover{background:var(--color-hover)}button.settings-row[tabindex="-1"]{cursor:default}button.settings-row[tabindex="-1"]:hover{background:none}
+.settings-row + .settings-row,.row-extra + .settings-row{box-shadow:inset 56px 1px 0 var(--color-surface-container),inset 0 1px 0 var(--color-divider)}
+.settings-row__icon{color:var(--color-text-secondary)}
+.settings-row__label{flex:1;font-size:16px;min-width:0}
+.settings-row__label small{display:block;font-size:13px;color:var(--color-text-secondary)}
+.info-row{cursor:default;padding-top:8px;padding-bottom:8px}.info-row .settings-row__label span{white-space:pre-wrap;word-break:break-word}
+.settings-row__value{font-size:14px;color:var(--color-text-secondary);background:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.settings-row--color-danger,.settings-row--color-danger .settings-row__icon{color:var(--color-danger)}
+.row-extra{padding:0 16px 12px 56px}
+.profile-head{display:flex;flex-direction:column;align-items:center;padding:24px 16px}
+.profile-head__avatar{width:96px;height:96px;border-radius:50%;position:relative}
+.profile-head__avatar .cam{position:absolute;right:-2px;bottom:-2px;width:32px;height:32px;min-height:0;padding:0;border-radius:50%;background:var(--color-primary);color:#fff;display:grid;place-items:center;border:2px solid var(--panel)}
+.profile-head__avatar .cam .ms{font-size:18px}
+.profile-head__name{font-size:22px;font-weight:500;margin-top:12px;text-align:center}
+.profile-head__status{font-size:14px;color:var(--color-primary)}
+.mini-head{display:flex;align-items:center;gap:16px;width:100%;max-width:620px;margin:8px auto 12px;padding:12px 16px;background:none;color:var(--color-text);text-align:left;border-radius:16px}
+.mini-head:hover{background:var(--color-hover)}.mini-head .ava{width:56px;height:56px;font-size:22px}.mini-head b{display:block;font-size:17px;font-weight:500}.mini-head small{font-size:14px;color:var(--color-text-secondary)}
+.edit-body{padding:0 16px 16px}.counter{text-align:right}.counter.bad{color:var(--color-danger)}
+.colors button{width:40px;height:40px;border:2px solid transparent}.colors button[aria-pressed=true]{border-color:var(--color-primary);box-shadow:inset 0 0 0 2px var(--panel)}
+.build-label{text-align:center;font-size:12px;color:var(--color-text-secondary);padding:16px}
+.pad{max-width:620px;margin:0 auto 8px;padding:0 16px}
+#settings .bar #editBtn{margin-left:auto}
