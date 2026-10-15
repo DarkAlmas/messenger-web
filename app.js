@@ -1217,11 +1217,11 @@ async function loadDevices(force) {
   txt($('devCount'), String(myDevs.length)); return myDevs;
 }
 function uaName(ua) {
-  ua = ua || ''; if (!ua) return { name: 'Неизвестное устройство', icon: 'devices' };
+  ua = ua || ''; if (!ua) return { name: 'Браузер', icon: 'devices' };
   const b = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /YaBrowser/.test(ua) ? 'Яндекс Браузер' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : /okhttp|Dalvik/i.test(ua) ? 'Приложение' : /supabase|java|kotlin/i.test(ua) ? 'Приложение' : null;
-  const o = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : null;
+  const o = /Android/.test(ua) ? 'Android' : /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : null;
   const mobile = /Android|iPhone|iPad|Mobile|okhttp|Dalvik/i.test(ua);
-  return { name: [b, o].filter(Boolean).join(', ') || ua.slice(0, 40), icon: mobile ? 'smartphone' : 'computer' };
+  return { name: [b || 'Браузер', o].filter(Boolean).join(' · '), icon: mobile ? 'smartphone' : 'computer' };
 }
 async function revokeSession(d) {
   const { error } = await sb.rpc('revoke_device', { p_session_id: d.id });
@@ -1436,7 +1436,7 @@ async function sessionEnded() {
   try { sb.removeAllChannels(); } catch (e) { /* */ } chan = null; profChan = null; inboxChan = null;
   // ключи не трогаем (правило 30 дней: rebind_device вернёт устройство при следующем входе)
   try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* */ }
-  onSession(null); toast('Сеанс завершён', 3000);
+  onSession(null); $('endedBanner').hidden = false;
 }
 async function rtAuth(token) {
   try { if (!token) { const { data } = await sb.auth.getSession(); token = data.session && data.session.access_token; } if (token) await sb.realtime.setAuth(token); }
@@ -1445,7 +1445,7 @@ async function rtAuth(token) {
 sb.auth.onAuthStateChange((e, s) => {
   if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token);
   if (e === 'SIGNED_OUT') { sb.removeAllChannels(); chan = null; profChan = null; inboxChan = null; }
-  if (e === 'SIGNED_IN') sessionGone = false;
+  if (e === 'SIGNED_IN') { sessionGone = false; $('endedBanner').hidden = true; }
   onSession(s);
 });
 // Вкладка вернулась из фона: если токен истёк (таймеры в фоне спят) — обновляем сессию и Realtime
