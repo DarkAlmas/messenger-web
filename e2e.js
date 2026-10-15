@@ -95,7 +95,11 @@ export function ensureReady() {
           for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп раздать новому id
           await topUp();
           return kv.dev;
-        } catch (err) { console.warn('rebind_device не удался, регистрируем новое устройство:', err && err.message); rebindFail = true; }
+        } catch (err) {
+          // 'rebind denied' — штатно (старый сеанс отозван/секрет не подошёл): молча заводим новые ключи
+          if (!/rebind denied/.test((err && err.message) || '')) console.warn('rebind_device не удался, регистрируем новое устройство:', err && err.message);
+          rebindFail = true;
+        }
       }
     }
     if (kv.dev !== dev || kv.uid !== uid) {
@@ -108,7 +112,9 @@ export function ensureReady() {
       }
       // Новая сессия = новое устройство; доверие (trust/verified) к собеседникам того же пользователя сохраняем
       const keepTrust = kv.uid === uid;
-      for (const k of Object.keys(kv)) if (!(keepTrust && (k.startsWith('trust:') || k.startsWith('pending:') || k.startsWith('verified:')))) await del(k);
+      // тот же пользователь: доверие и уже расшифрованный текст (pts:/pt:/ptg:) оставляем — история и резервная копия не теряются
+      const keep = k => keepTrust && /^(trust|pending|verified|pts|pt|ptg):/.test(k);
+      for (const k of Object.keys(kv)) if (!keep(k)) await del(k);
       store = Store.newDevice();
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
     } else {

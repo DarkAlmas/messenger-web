@@ -389,7 +389,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015s').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015x').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -459,6 +459,7 @@ async function renderMsg(m, d) {
         fb.title = 'Скачать и расшифровать';
         txt(fb, '📎 ' + (pl.f.n || 'файл') + (pl.f.s ? ' · ' + fmtSize(pl.f.s) : ''));
         fb.onclick = () => { fb.disabled = true; downloadFile(pl.f, !mine).catch(e => alert(e.userMsg || ruErr(e))).finally(() => { fb.disabled = false; }); };
+        const pv = imagePreview(pl.f); if (pv) d.append(pv);
         d.append(fb);
       }
       lock.className = 'lock'; lock.title = 'Сквозное шифрование'; txt(lock, '🔒');
@@ -1043,6 +1044,31 @@ async function fetchFilePlain(f) {
   if (!(await e2eStart())) throw userErr('Шифрование на этом устройстве не запустилось — файл не расшифровать.');
   return E2E.decryptFile(ct, f.k, f.iv, f.h);
 }
+// ---------- превью картинок: расшифровка в blob:, полноэкранный просмотр ----------
+const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+const imgUrls = {}; // путь файла → Promise<blob URL>
+function imgMime(f) {
+  const m = String(f.m || '').toLowerCase(); if (Object.values(IMG_MIME).includes(m)) return m;
+  const ext = String(f.n || '').toLowerCase().split('.').pop(); return IMG_MIME[ext] || null; // SVG не показываем
+}
+function imagePreview(f) {
+  const mime = imgMime(f); if (!mime || !f.p || (f.s && f.s > 15 * 1048576)) return null;
+  const box = document.createElement('div'); box.className = 'img-prev loading'; txt(box, f.s ? fmtSize(f.s) : '…');
+  (imgUrls[f.p] = imgUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: mime }))))
+    .then(url => {
+      const im = document.createElement('img'); im.alt = safeName(f.n); im.src = url;
+      im.onload = () => { box.textContent = ''; box.classList.remove('loading'); box.append(im); };
+      im.onerror = () => { txt(box, 'Не удалось показать картинку'); };
+      box.onclick = ev => { ev.stopPropagation(); openImage(url, im.alt); };
+    })
+    .catch(() => { delete imgUrls[f.p]; txt(box, 'Не удалось загрузить картинку'); box.classList.remove('loading'); });
+  return box;
+}
+function openImage(url, alt) {
+  let v = $('imgView');
+  if (!v) { v = document.createElement('dialog'); v.id = 'imgView'; v.className = 'img-view'; v.onclick = () => v.close(); document.body.append(v); }
+  v.textContent = ''; const im = document.createElement('img'); im.src = url; im.alt = alt || ''; v.append(im); v.showModal();
+}
 async function downloadFile(f, fromOther) {
   const name = safeName(f.n);
   if (fromOther && RISKY.some(x => name.toLowerCase().endsWith('.' + x)) && !confirm(`«${name}» может быть опасным файлом. Скачать?`)) return;
@@ -1439,6 +1465,12 @@ function endedBanner(err) {
   $('endedBanner').hidden = false;
 }
 async function sessionEnded(err) {
+  if (sessionGone) return;
+  // перепроверяем: временная ошибка обновления (особенно при загрузке) не повод выходить
+  const remote = err && (/session_not_found|refresh_token_not_found/.test(err.code || '') || /session.*not found|refresh token not found/i.test(err.message || ''));
+  if (!remote) {
+    try { const { data, error } = await sb.auth.refreshSession(); if (data && data.session && !error) return; if (error && isNetErr(error)) return; } catch (e) { if (isNetErr(e)) return; }
+  }
   if (sessionGone) return; sessionGone = true; endedBanner(err);
   try { sb.removeAllChannels(); } catch (e) { /* */ } chan = null; profChan = null; inboxChan = null;
   // ключи не трогаем (правило 30 дней: rebind_device вернёт устройство при следующем входе)
@@ -1451,7 +1483,8 @@ async function rtAuth(token) {
 }
 sb.auth.onAuthStateChange((e, s) => {
   if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token);
-  if (e === 'SIGNED_OUT' && !userSignOut && !sessionGone && me) { sessionGone = true; endedBanner(null); } // SIGNED_OUT от автообновления токена
+  // SIGNED_OUT не от пользователя: баннер, только если сессии действительно нет после перепроверки
+  if (e === 'SIGNED_OUT' && !userSignOut && !sessionGone && me) setTimeout(async () => { try { const { data } = await sb.auth.getSession(); if (!data.session && !userSignOut && !me) endedBanner(null); } catch (x) { /* */ } }, 800);
   if (e === 'SIGNED_OUT') { userSignOut = false; sb.removeAllChannels(); chan = null; profChan = null; inboxChan = null; }
   if (e === 'SIGNED_IN') { sessionGone = false; $('endedBanner').hidden = true; }
   onSession(s);
@@ -1487,7 +1520,8 @@ async function collectMessages(progress) {
       if (!data || !data.length) break;
       for (const m of data) {
         if (!m.ciphertext) continue;
-        const pl = await decryptPayload(m);
+        let pl = await decryptPayload(m);
+        if (!pl || pl.fail || pl.other) { const c = E2E && await E2E.cachedPlain(m.id); pl = c ? parsePayload(c) : null; }
         if (pl && !pl.fail && !pl.other) out.push(Backup.toEntry(m, pl));
       }
       before = data[data.length - 1].created_at;
@@ -1503,6 +1537,7 @@ async function createBackup(pass, progress) {
   const salt = row ? row.salt : Backup.newSalt(), kdf = row && row.kdf && row.kdf.alg === 'argon2id' ? row.kdf : Backup.DEFAULT_KDF;
   progress('Собираем сообщения…');
   const messages = await collectMessages(progress);
+  if (!messages.length && !(await askConfirm('В копию не попадёт ни одного сообщения: на этом устройстве нет расшифрованной переписки. Всё равно создать?', 'Создать'))) throw userErr('Отменено');
   progress('Шифруем копию…');
   const key = await Backup.deriveKey(pass, salt, kdf);
   const bin = await Backup.seal({ v: 1, uid: me.id, created_at: new Date().toISOString(), messages }, key, me.id);
@@ -1525,6 +1560,8 @@ async function restoreBackup(pass, progress) {
   const o = await Backup.open(await data.arrayBuffer(), key, me.id);
   progress('Добавляем сообщения…');
   const n = await E2E.importPlain(o.messages.map(Backup.toCache).filter(Boolean));
+  // перерисовываем: старые сообщения теперь берутся из кэша как открытый текст
+  await loadChats().catch(() => {});
   if (currentChat) { const li = document.querySelector(`#chatList li[data-id="${currentChat.id}"]`); if (li) { currentChat = null; li.click(); } }
   return { total: o.messages.length, added: n };
 }
@@ -1544,15 +1581,22 @@ function backupSheet(first) {
     if (p1.value !== p2.value) return txt(st, 'Фразы не совпадают');
     busy(true);
     try { const n = await createBackup(p1.value, s => txt(st, s)); txt(st, ''); p1.value = p2.value = ''; toast(`Копия создана: ${n} сообщ.`, 3000); $('sheetDlg').close(); paintBackupRow(); }
-    catch (e) { txt(st, ''); toast('Копия не создана: ' + (e.userMsg || ruErr(e)), 4000); }
+    catch (e) { if (e.userMsg === 'Отменено') { txt(st, ''); return; } st.classList.add('err'); txt(st, 'Копия не создана: ' + (e.userMsg || ruErr(e))); }
     finally { busy(false); }
   };
   br.onclick = async () => {
     if (!p1.value) return txt(st, 'Введите фразу');
     busy(true);
-    try { const r = await restoreBackup(p1.value, s => txt(st, s)); txt(st, ''); p1.value = p2.value = ''; toast(`Восстановлено: ${r.added} из ${r.total}`, 3000); $('sheetDlg').close(); }
-    catch (e) { txt(st, ''); toast(e instanceof Backup.BadPass ? 'Неверная фраза' : 'Не удалось восстановить: ' + (e.userMsg || ruErr(e)), 4000); }
-    finally { busy(false); }
+    p1.classList.remove('bad'); st.classList.remove('err');
+    try {
+      const r = await restoreBackup(p1.value, s => txt(st, s)); txt(st, ''); p1.value = p2.value = ''; $('sheetDlg').close();
+      if (r.total) toast('Восстановлено ' + r.total + ' ' + plural(r.total, 'сообщение', 'сообщения', 'сообщений'), 3000); else toast('В копии нет сообщений', 3000);
+    } catch (e) {
+      // ошибка — внутри диалога (тост под модальным окном не виден); фраза остаётся
+      st.classList.add('err');
+      if (e instanceof Backup.BadPass) { txt(st, 'Неверная фраза'); p1.classList.add('bad'); }
+      else txt(st, 'Не удалось восстановить: ' + (e.userMsg || ruErr(e)));
+    } finally { busy(false); if (st.classList.contains('err')) p1.focus(); }
   };
   if (first) { bc.hidden = true; p2.hidden = true; br.textContent = 'Восстановить из копии'; br.className = ''; }
   const acts = el('div', 'bk-actions'); acts.append(bc, br, later);
