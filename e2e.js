@@ -58,9 +58,23 @@ async function runLocked(fn) {
   try { return await fn(); }
   finally { if (dirty && db) { ver = Math.random().toString(36).slice(2); kv.ver = ver; await tx('readwrite', s => s.put(ver, 'ver')); dirty = false; } }
 }
+// Блокировку между вкладками ждём не дольше LOCK_WAIT: зависшая/замороженная (Android Chrome в фоне) вкладка,
+// держащая 'msgr-e2e', иначе навсегда останавливала расшифровку и загрузку чата — сообщения молча не показывались.
+// Держим блокировку не дольше LOCK_HOLD: операция, ждущая сеть без ответа, отпускает очередь (её результат придёт позже).
+const LOCK_WAIT = 12000, LOCK_HOLD = 30000;
+export class LockBusy extends Error { constructor() { super('шифрование занято другой вкладкой этого браузера'); this.name = 'LockBusy'; this.userMsg = 'Шифрование занято другой вкладкой этого браузера. Закройте лишние вкладки сайта и обновите страницу.'; } }
+const holdCap = p => Promise.race([p, new Promise(r => setTimeout(() => { console.warn('e2e: операция дольше ' + LOCK_HOLD / 1000 + ' с — очередь шифрования освобождена'); r(); }, LOCK_HOLD))]);
 const locked = fn => {
-  const run = () => navigator.locks ? navigator.locks.request('msgr-e2e', () => runLocked(fn)) : runLocked(fn);
-  const p = chain.then(run, run); chain = p.catch(() => {}); return p;
+  const run = () => {
+    if (!navigator.locks) return runLocked(fn);
+    let res, rej; const out = new Promise((a, b) => { res = a; rej = b; });
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
+    const t = ac && setTimeout(() => ac.abort(), LOCK_WAIT);
+    navigator.locks.request('msgr-e2e', ac ? { signal: ac.signal } : {}, () => { clearTimeout(t); const p = runLocked(fn); p.then(res, rej); return holdCap(p.catch(() => {})); })
+      .catch(e => { clearTimeout(t); if (e && e.name === 'AbortError') { console.error('e2e: блокировка msgr-e2e не получена за ' + LOCK_WAIT / 1000 + ' с (другая вкладка)'); rej(new LockBusy()); } else rej(e); });
+    return out;
+  };
+  const p = chain.then(run, run); chain = holdCap(p.catch(() => {})); return p;
 };
 
 function sessionId(jwt) { const p = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(decodeURIComponent(escape(atob(p)))).session_id; }
@@ -134,6 +148,11 @@ function ensureReadyFor(sid) {
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
     } else {
       try { store = Store.load(kv.state); } catch (err) { console.error(err); throw keysLost('не удалось прочитать сохранённые ключи'); }
+      // Строки devices_keys этой сессии нет на сервере (удалена/не дошла) — регистрируем ключи заново, иначе собеседники не могут писать
+      if (kv.uploaded === '1') {
+        const { data: row, error } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
+        if (!error && !row) { console.warn('e2e: нет строки devices_keys для этой сессии — регистрируем ключи'); for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); await put('uploaded', '0'); }
+      }
     }
     await publish(dev);
     await ensureSecret();
@@ -185,7 +204,14 @@ async function topUp() {
 async function devicesFor(user) {
   const trust = jget('trust:' + user);
   if (!claimedAt[user] || Date.now() - claimedAt[user] > CLAIM_TTL) {
-    const rows = chk(await sb.rpc('claim_prekeys', { p_user: user })) || [];
+    let rows;
+    try { rows = chk(await sb.rpc('claim_prekeys', { p_user: user })) || []; }
+    catch (err) {
+      // Сбой claim_prekeys: уже установленные сессии (бандл, полученный при открытии чата) используем; без них — ошибка наверх
+      const have = Object.keys(trust).filter(d => store.hasSession(d));
+      if (have.length && !kv['pending:' + user]) { console.warn('claim_prekeys: ошибка, используем установленные сессии', err && (err.code || err.message)); return have; }
+      throw err;
+    }
     if (rows.length) claimedAt[user] = Date.now(); else delete claimedAt[user]; // пустой ответ не кэшируем: собеседник может войти в любой момент
     const valid = {};
     for (const o of rows) {
@@ -252,7 +278,9 @@ export function decryptDM(m) {
     if (!e) return null;
     const ck = 'pt:' + m.id + ':' + await h16(e.b);
     if (kv[ck]) return kv[ck];
-    const s = store.decrypt(e.f, e.t, e.b);
+    let s;
+    try { s = store.decrypt(e.f, e.t, e.b); }
+    catch (err) { const x = new Error('decrypt t=' + e.t + ' from ' + String(e.f).slice(0, 8) + ': ' + ((err && err.message) || err)); x.cause = err; throw x; }
     await saveStore(); await put(ck, s);
     if (m.sender_id) {
       await put('devuser:' + e.f, m.sender_id);

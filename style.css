@@ -360,3 +360,10 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .msg .img-prev.loading .spinner{width:28px;height:28px;border:3px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gspin .8s linear infinite}
 #newDirect{position:relative}#newDirect.busy .lbl{visibility:hidden}
 #newDirect.busy::after{content:"";position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:gspin .8s linear infinite}
+/* Баннер «Установить приложение» (только Android) */
+.app-banner{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--color-secondary-container,#e8def8);color:var(--color-text-primary,inherit);font-size:14px}
+.app-banner .ab-text{flex:1;min-width:0}
+.app-banner .ab-title{font-weight:600}
+.app-banner .ab-cert{font-size:11px;color:var(--color-text-secondary,#666);word-break:break-all;font-family:monospace}
+.app-banner .ab-go{padding:6px 14px;border-radius:16px;background:var(--color-primary,#3390ec);color:#fff;text-decoration:none;font-weight:600}
+.app-banner .ab-x{background:none;border:0;padding:4px;cursor:pointer;color:inherit;display:flex}

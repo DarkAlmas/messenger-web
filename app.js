@@ -397,7 +397,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zi').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zj').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -416,9 +416,11 @@ async function deviceCheck(force) {
 setInterval(() => deviceCheck(true), 10 * 60 * 1000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') deviceCheck(false); });
 window.addEventListener('focus', () => deviceCheck(false));
+let e2eBusyAt = 0;
 async function e2eStart() {
+  if (e2eErr && e2eErr.name === 'LockBusy' && Date.now() - e2eBusyAt < 15000) return false;
   try { const m = await e2eMod; await m.ensureReady(); e2eErr = null; }
-  catch (e) { e2eErr = e; console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
+  catch (e) { e2eErr = e; if (e && e.name === 'LockBusy') { e2eBusyAt = Date.now(); retryBusySoon(); } console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
   return E2E && !e2eErr;
 }
 const sentOwn = {}; // подпись шифротекста → открытый текст (своё сообщение приходит по Realtime раньше, чем сохранится копия)
@@ -430,18 +432,34 @@ function parsePayload(pt) {
   const f = o.f && typeof o.f === 'object' ? o.f : null, cap = f && typeof o.caption === 'string' ? o.caption.slice(0, 4000) : '';
   return { t: (o.t || '') || cap, t0: o.t || '', caption: cap, f, fw: typeof o.fw === 'string' ? o.fw.slice(0, 64) : null };
 }
+const DECRYPT_WAIT = 8000;
+// Шифрование занято другой вкладкой: через 16 с перерисовываем пузыри, оставшиеся «Расшифровка…»
+let busyT = null;
+function retryBusySoon() {
+  if (busyT) return;
+  busyT = setTimeout(() => { busyT = null; for (const [id, d] of Object.entries(msgEls)) { const x = msgData[id]; if (x && !x.pl && d.dataset.pending === '1') renderSafe(x.m, d); } }, 16000);
+}
+/** Расшифровка с ограничением ожидания: не успели — {pending}, сообщение показывается «Расшифровка…» и перерисуется по готовности. */
+function decryptPayloadT(m, d) {
+  const p = decryptPayload(m);
+  return Promise.race([p, new Promise(r => setTimeout(() => r({ pending: true }), DECRYPT_WAIT))]).then(pl => {
+    if (pl && pl.pending) p.then(() => { if (d.isConnected && msgEls[m.id] === d) renderMsg(m, d); });
+    return pl;
+  });
+}
 async function decryptPayload(m) {
   const sig = ctSig(m.ciphertext);
   if (sig && sentOwn[sig]) return parsePayload(sentOwn[sig]);
-  if (!(await e2eStart())) return null;
+  if (!(await e2eStart())) return e2eErr && e2eErr.name === 'LockBusy' ? { pending: true, busy: true } : null;
   try {
     if (m.ciphertext.sk !== undefined) {
       try { return parsePayload(await E2E.decryptGroup(m.chat_id, m)); }
       catch (e) { if (!(e instanceof E2E.NoKey)) throw e; await E2E.receive(m.chat_id); return parsePayload(await E2E.decryptGroup(m.chat_id, m)); }
     }
     const pt = await E2E.decryptDM(m);
-    return pt == null ? { other: true } : parsePayload(pt);
-  } catch (e) { console.warn('decrypt', m.id, e); return { fail: true }; }
+    if (pt == null) { console.info('decrypt', m.id, 'нет конверта для устройства', E2E.deviceId(), 'есть:', Object.keys(m.ciphertext || {}).map(k => k.slice(0, 8)).join(',')); return { other: true }; }
+    return parsePayload(pt);
+  } catch (e) { console.error('Не удалось расшифровать', m.id, (e && e.message) || e); return { fail: true, why: (e && e.message) || String(e) }; }
 }
 const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' МБ' : n >= 1024 ? Math.round(n / 1024) + ' КБ' : n + ' Б';
 const msgEls = {};
@@ -461,9 +479,10 @@ async function renderMsg(m, d) {
   const lock = document.createElement('span');
   if (m.ciphertext) {
     chatHasE2e = true;
-    pl = await decryptPayload(m);
-    if (pl && !pl.other && !pl.fail) {
-      txt(b, pl.t); if (!pl.t) b.hidden = true;
+    b.className = 'body e2e'; txt(b, 'Расшифровка…'); // пока ждём расшифровку — не пустой пузырь
+    pl = await decryptPayloadT(m, d);
+    if (pl && !pl.other && !pl.fail && !pl.pending) {
+      b.className = 'body'; txt(b, pl.t); if (!pl.t) b.hidden = true;
       if (pl.f) {
         const fb = fileRow(pl.f, !mine);
         const pv = imagePreview(pl.f, pl.t, !mine, bad => { pv.replaceWith(bad ? brokenRow(pl.f) : fb); d.classList.remove('has-img', 'img-only'); });
@@ -471,12 +490,13 @@ async function renderMsg(m, d) {
         else d.append(fb);
       }
       lock.className = 'lock'; lock.title = 'Сквозное шифрование'; txt(lock, '🔒');
-    } else { b.className = 'body e2e'; txt(b, pl && pl.other ? 'зашифровано для другого устройства' : pl && pl.fail ? 'не удалось расшифровать' : 'зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
+    } else { b.className = 'body e2e'; txt(b, pl && pl.pending ? 'Расшифровка…' : pl && pl.other ? 'Зашифровано для другого устройства' : pl && pl.fail ? 'Не удалось расшифровать' : 'Зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
   } else {
     txt(b, m.body);
     lock.className = 'noe2e'; lock.title = 'Старое сообщение без шифрования'; txt(lock, '⚠ не зашифровано');
   }
-  msgData[m.id] = { m, pl: pl && !pl.other && !pl.fail ? pl : null };
+  msgData[m.id] = { m, pl: pl && !pl.other && !pl.fail && !pl.pending ? pl : null };
+  if (pl && pl.pending) d.dataset.pending = '1'; else delete d.dataset.pending;
   if (m.forwarded) { const f = document.createElement('span'); f.className = 'fwd'; txt(f, '↪ Переслано' + (pl && pl.fw ? ' от ' + pl.fw : '')); d.insertBefore(f, small.textContent ? small.nextSibling : d.firstChild); }
   if (m.reply_to) {
     const q = document.createElement('span'); q.className = 'reply'; q.dataset.to = m.reply_to;
@@ -777,17 +797,28 @@ document.querySelectorAll('#seenSeg button').forEach(b => {
   };
 });
 
+/** Пузырь-заглушка сразу в ленте (до расшифровки). */
+function placeMsg(m, put) {
+  const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
+  d.className = 'msg' + (me && m.sender_id === me.id ? ' mine' : ''); d.dataset.at = m.created_at; d.dataset.sender = m.sender_id || '';
+  const b = document.createElement('span'); b.className = 'body e2e'; txt(b, m.ciphertext ? 'Расшифровка…' : (m.body || '')); d.append(b);
+  put(d); return d;
+}
+async function renderSafe(m, d) {
+  try { await renderMsg(m, d); }
+  catch (e) { console.error('renderMsg', m.id, e); d.className = 'msg' + (me && m.sender_id === me.id ? ' mine' : ''); d.textContent = ''; const b = document.createElement('span'); b.className = 'body e2e'; txt(b, 'Не удалось показать сообщение'); d.append(b); }
+}
 async function addMsg(m) {
   if (msgEls[m.id]) return updMsg(m);
   const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
   const box = $('messages'); box.appendChild(d);
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
-  await renderMsg(m, d);
+  await renderSafe(m, d);
   if (nearBottom || m.sender_id === me.id) box.scrollTop = box.scrollHeight;
   else if (m.sender_id !== me.id && m.created_at > (msgData.__openedAt || '')) { jumpUnread++; }
   paintJump();
 }
-async function updMsg(m) { const d = msgEls[m.id]; if (d) await renderMsg(m, d); }
+async function updMsg(m) { const d = msgEls[m.id]; if (d) await renderSafe(m, d); }
 async function openChat(c, li) {
   currentChat = c; readState = {}; lastMarked = 0; pins = []; pinIdx = 0; jumpUnread = 0; lastSeen = undefined; typingUntil = 0; cancelCompose(); closeMenu();
   for (const k of Object.keys(msgData)) delete msgData[k];
@@ -811,10 +842,12 @@ async function openChat(c, li) {
       peerUnknown = !p; if (!p && !c.name) txt($('chatTitle'), UNKNOWN_NAME);
       if (p) txt($('chatTitle'), displayName(p)); fillAvatar($('chatAva'), p); paintSub();
     });
-    if (peerId && await e2eStart()) E2E.peerHasKeys(peerId).then(h => { if (currentChat === c) { $('safetyBtn').hidden = !h; safetyLabel(); } }).catch(() => {});
+    // Не ждём шифрование перед загрузкой сообщений: зависшая инициализация не должна прятать чат
+    if (peerId) e2eStart().then(ok => ok && E2E.peerHasKeys(peerId)).then(h => { if (currentChat === c) { $('safetyBtn').hidden = !h; safetyLabel(); } })
+      .catch(e => { if (currentChat === c) { console.warn('claim_prekeys', e); toast('Не удалось получить ключи собеседника: ' + ruErr(e)); } });
   } else {
     fillAvatar($('chatAva'), { display_name: c.title || '?', id: c.id });
-    if (await e2eStart()) { try { await E2E.receive(c.id); } catch (e) { showErr('Не удалось получить ключи группы: ' + ruErr(e)); } }
+    e2eStart().then(ok => ok && E2E.receive(c.id)).catch(e => showErr('Не удалось получить ключи группы: ' + ruErr(e)));
   }
   if (currentChat !== c) return;
   if (chan) sb.removeChannel(chan);
@@ -828,7 +861,13 @@ async function openChat(c, li) {
   const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE);
   if (error) showErr('Не удалось загрузить сообщения: ' + ruErr(error));
   if (currentChat !== c) return;
-  for (const m of (data || []).reverse()) await addMsg(m);
+  // Сначала все пузыри сразу (заглушка «Расшифровка…»), потом расшифровка по порядку: зависшее шифрование не прячет сообщения
+  const list = (data || []).reverse(), els = list.map(m => placeMsg(m, d => $('messages').appendChild(d)));
+  $('messages').scrollTop = $('messages').scrollHeight;
+  (async () => {
+    for (let i = 0; i < list.length; i++) { if (currentChat !== c) return; if (msgEls[list[i].id] === els[i]) await renderSafe(list[i], els[i]); }
+    if (currentChat === c) { $('messages').scrollTop = $('messages').scrollHeight; redoSeps(); paintPinBar(); }
+  })();
   if (data && data.length) oldestAt = data[0].created_at;
   olderBtn.hidden = !(data && data.length === PAGE);
   if (!(data || []).length) { const p = document.createElement('p'); p.className = 'empty-state'; txt(p, 'Сообщений пока нет. Всё, что вы напишете, будет зашифровано сквозным шифрованием.'); $('messages').append(p); }
@@ -846,11 +885,12 @@ olderBtn.onclick = async () => {
     if (error) throw error;
     if (currentChat !== c) return;
     const h0 = box.scrollHeight, top0 = box.scrollTop;
+    const todo = [];
     for (const m of data || []) { // от новых к старым, каждое вставляем сразу после кнопки
       if (msgEls[m.id]) continue;
-      const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
-      btn.after(d); await renderMsg(m, d);
+      todo.push([m, placeMsg(m, d => btn.after(d))]);
     }
+    for (const [m, d] of todo) await renderSafe(m, d);
     loadReacts((data || []).map(m => m.id));
     redoSeps(); box.scrollTop = top0 + (box.scrollHeight - h0); // остаёмся на том же месте
     paintPinBar();
@@ -1109,12 +1149,12 @@ function imagePreview(f, caption, fromOther, onFallback) {
   }))
     .then(url => {
       const im = document.createElement('img'); im.alt = safeName(f.n); im.src = url;
-      im.onload = () => { box.textContent = ''; box.classList.remove('loading'); box.append(im); };
-      im.onerror = () => { txt(box, 'Не удалось показать картинку'); };
+      im.onload = () => { box.textContent = ''; box.classList.remove('loading'); box.removeAttribute('aria-label'); box.setAttribute('role', 'button'); box.setAttribute('aria-label', 'Открыть фото ' + im.alt); box.append(im); };
+      im.onerror = () => { box.classList.remove('loading'); box.removeAttribute('aria-label'); txt(box, 'Не удалось показать картинку'); };
       box.onclick = ev => { ev.stopPropagation(); openImage(url, im.alt, f, caption, fromOther); };
     })
     .catch(e => {
-      delete imgUrls[f.p]; box.classList.remove('loading'); box.onclick = null;
+      delete imgUrls[f.p]; box.classList.remove('loading'); box.removeAttribute('aria-label'); box.onclick = null;
       if (e && (e.notImage || e.corrupt) && onFallback) return onFallback(!!e.corrupt); // не картинка — как файл; повреждён — строка ошибки
       txt(box, 'Не удалось загрузить картинку');
     });
@@ -1137,14 +1177,15 @@ function msIcon(name, cls) { const i = document.createElement('span'); i.classNa
 const lastPrev = {}; // chat_id + last_at → {icon, text}
 async function filePreviewSoon(c, sub) {
   const key = c.id + '|' + c.last_at;
-  const paint = v => { if (!v || !sub.isConnected) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
+  const paint = v => { if (!v || !sub.isConnected) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
   if (lastPrev[key]) return paint(lastPrev[key]);
   try {
     const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (!data || !data.ciphertext) return;
     const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other || !pl.f) return;
     const img = !!imgMime(pl.f);
-    paint(lastPrev[key] = { icon: img ? 'image' : 'description', text: img ? (pl.caption || pl.t || 'Фото') : (pl.caption || safeName(pl.f.n)) });
+    const cap = pl.caption || pl.t || '';
+    paint(lastPrev[key] = img ? (cap ? { icon: null, text: '🖼 ' + cap } : { icon: 'image', text: 'Фото' }) : { icon: 'description', text: cap || safeName(pl.f.n) });
   } catch (e) { /* остаётся «Файл» */ }
 }
 function iconBtn(name, label, cls) { const b = document.createElement('button'); b.type = 'button'; b.className = 'icon ' + (cls || ''); b.setAttribute('aria-label', label); b.title = label; b.append(msIcon(name)); return b; }
@@ -1557,6 +1598,7 @@ async function onSession(session) {
   lastUid = uid;
   me = session ? session.user : null;
   $('auth').hidden = !!me; $('app').hidden = !me;
+  { const pw = $('password'); if (pw) pw.value = ''; } // пароль не остаётся в поле ни после входа, ни после выхода
   if (me) {
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
