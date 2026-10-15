@@ -15,12 +15,14 @@ export const isFreshDevice = () => freshDev;
 async function rebindArgs(oldDev) { return { p_old_device: oldDev, p_secret: kv.dsec }; }
 /** Секрет устройства (32 случайных байта, base64url без '='): хранится только рядом с ключами и уходит только в set_device_secret/rebind_device. Не логировать. */
 function newSecret() { const b = crypto.getRandomValues(new Uint8Array(32)); let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
-async function ensureSecret() {
-  if (kv.dsec && kv.dsec_set === '1') return;
-  if (!kv.dsec) await put('dsec', newSecret());
-  const { error } = await sb.rpc('set_device_secret', { p_secret: kv.dsec });
-  if (error) { console.warn('set_device_secret: ошибка', error.code || error.message); return; } // повторим при следующей загрузке
-  await put('dsec_set', '1');
+/** Свежий секрет после rebind_device и после регистрации новых ключей. Локально заменяем только после успеха RPC;
+ *  при ошибке старый секрет остаётся (rebind по нему ещё работает), смену повторим при следующем запуске. */
+async function ensureSecret(rotate) {
+  if (!rotate && kv.dsec && kv.dsec_set === '1' && kv.dsec_rotate !== '1') return;
+  const fresh = newSecret();
+  const { error } = await sb.rpc('set_device_secret', { p_secret: fresh });
+  if (error) { console.warn('set_device_secret: ошибка', error.code || error.message); if (kv.dsec) await put('dsec_rotate', '1'); return; }
+  await put('dsec', fresh); await put('dsec_set', '1'); if (kv.dsec_rotate) await del('dsec_rotate');
 }
 export class KeyChange extends Error { constructor(u) { super('Ключ безопасности собеседника изменился'); this.userId = u; } }
 export class NoKey extends Error {}
@@ -106,6 +108,7 @@ function ensureReadyFor(sid) {
           store = cand; await put('uploaded', '1');
           for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); // ключи групп раздать новому id
           await topUp();
+          await ensureSecret(true); // секрет старого устройства больше не используем
           return kv.dev;
         } catch (err) {
           // 'rebind denied' — штатно (старый сеанс отозван/секрет не подошёл): молча заводим новые ключи
