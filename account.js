@@ -117,7 +117,7 @@ let fSeq = 0, fTimer = null, findRpc = true;
 async function findUser(n) {
   if (findRpc) {
     const { data, error } = await sb.rpc('find_user', { username: n });
-    if (!error) { const r = Array.isArray(data) ? data[0] : data; return { list: r && r.id ? [r] : [] }; }
+    if (!error) { const r = Array.isArray(data) ? data[0] : data; if (r && r.id) seedProfile(r); return { list: r && r.id ? [r] : [] }; }
     if (error.code === '42883' || error.code === 'PGRST202') findRpc = false; else return { error };
   }
   return { list: [], error: { message: 'Поиск временно недоступен' } }; // прямое чтение profiles по имени не используем

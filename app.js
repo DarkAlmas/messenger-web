@@ -334,8 +334,10 @@ async function getProfile(id, fresh) {
   const { data, error } = await sb.from('profiles').select('*').eq('id', id).maybeSingle();
   if (error) { console.warn('profile', error); return profiles[id] || null; }
   if (data) { profileExt = 'bio' in data && 'avatar_url' in data && 'avatar_color' in data && 'avatar_letter' in data; profiles[id] = data; }
-  return data;
+  return data || profiles[id] || null; // RLS может скрыть чужой профиль без общего чата — берём кэш (например, из find_user)
 }
+/** Профиль из find_user — в кэш, чтобы шапка/имя работали до появления общего чата */
+function seedProfile(p) { if (p && p.id) profiles[p.id] = { ...(profiles[p.id] || {}), ...p }; }
 function displayName(p) { return p ? (p.display_name || '@' + p.username) : 'неизвестный'; }
 async function nameOf(id) { const p = await getProfile(id); return p ? displayName(p) : 'неизвестный'; }
 const COLORS = ['#5c6bc0', '#26a69a', '#ef6c00', '#ab47bc', '#42a5f5', '#ec407a', '#7cb342', '#8d6e63']; // как Ui.AVATAR в Android (docs/design)
@@ -391,7 +393,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015z').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015za').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1140,7 +1142,7 @@ $('findForm').onsubmit = async e => {
   try {
     const { list, error: fe } = await window.findUserExact(nick);
     if (fe) return say(window.isRateErr(fe) ? 'Слишком часто, подождите немного' : ruErr(fe));
-    const u = list[0];
+    const u = list[0]; if (u && u.id) seedProfile(u);
     if (!u) return say('Пользователь @' + nick + ' не найден');
     if (u.id === me.id) return say('Это ваше собственное имя пользователя');
     const { data: chatId, error } = await sb.rpc('create_direct_chat', { p_other: u.id });
