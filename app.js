@@ -396,7 +396,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zb').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261015zc').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1461,7 +1461,7 @@ async function onSession(session) {
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
     { const m = /^#(profile|settings)$/.exec(location.hash); if (m) openSettings(false, m[1]); else setNav('chats'); }
-    e2eStart().then(ok => { deviceCheck(true); if (ok && E2E.rebindFailed && E2E.rebindFailed()) offerRestore(); });
+    e2eStart().then(ok => { deviceCheck(true); if (ok && E2E.isFreshDevice && E2E.isFreshDevice()) offerRestore(); });
     paintBackupRow();
     loadChats();
   } else { currentChat = null; $('app').classList.remove('in-chat', 'in-settings'); qrFails = 0; startQr(); }
@@ -1625,4 +1625,9 @@ function backupSheet(first) {
   sheet(first ? 'Восстановить переписку?' : 'Резервная копия', nodes);
 }
 $('rowBackup').onclick = async () => { try { await getBackupRow(); } catch (e) { return toast('Не удалось загрузить: ' + ruErr(e), 3000); } backupSheet(false); };
-async function offerRestore() { try { if (await getBackupRow()) backupSheet(true); } catch (e) { console.warn('key_backups', e); } }
+// «Восстановить переписку?» — один раз после регистрации новых ключей, если на сервере есть копия; отказ помним для uid+устройства
+async function offerRestore() {
+  const k = 'msgr-restore-offered:' + me.id + ':' + (E2E.deviceId() || '');
+  try { if (localStorage.getItem(k)) return; } catch (e) { /* */ }
+  try { if (await getBackupRow()) { try { localStorage.setItem(k, '1'); } catch (e) { /* */ } backupSheet(true); } } catch (e) { console.warn('key_backups', e); }
+}

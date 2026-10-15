@@ -9,6 +9,8 @@ const claimedAt = {};
 let rebindFail = false;
 /** Был ли при этом входе неудачный перенос ключей (тогда переписку можно вернуть из резервной копии) */
 export const rebindFailed = () => rebindFail;
+let freshDev = false; // в этом запуске заведены новые ключи (новое устройство)
+export const isFreshDevice = () => freshDev;
 /** Аргументы rebind_device. Сюда же добавится подпись серверного challenge старым identity-ключом, когда сервер её потребует. */
 async function rebindArgs(oldDev) { return { p_old_device: oldDev, p_secret: kv.dsec }; }
 /** Секрет устройства (32 случайных байта, base64url без '='): хранится только рядом с ключами и уходит только в set_device_secret/rebind_device. Не логировать. */
@@ -115,7 +117,7 @@ export function ensureReady() {
       // тот же пользователь: доверие и уже расшифрованный текст (pts:/pt:/ptg:) оставляем — история и резервная копия не теряются
       const keep = k => keepTrust && /^(trust|pending|verified|pts|pt|ptg):/.test(k);
       for (const k of Object.keys(kv)) if (!keep(k)) await del(k);
-      store = Store.newDevice();
+      store = Store.newDevice(); freshDev = true;
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
     } else {
       try { store = Store.load(kv.state); } catch (err) { console.error(err); throw keysLost('не удалось прочитать сохранённые ключи'); }
