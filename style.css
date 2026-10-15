@@ -396,3 +396,5 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .idmm #idmmGo{width:100%;margin-top:8px}
 .idmm-info{text-align:left;width:100%;margin:0;padding:10px 12px;background:var(--panel2);color:var(--muted);border-radius:8px;font-size:12px;white-space:pre-wrap;word-break:break-all;user-select:text}
 .idmm-box{width:100%;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.idmm #idmmAll{align-self:center;margin-top:8px}
+.idmm-hint{margin:0;width:100%;text-align:center;color:var(--muted);font-size:13px}

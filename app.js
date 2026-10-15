@@ -431,17 +431,27 @@ function showIdMismatch(e) {
   el.innerHTML = '<div class="idmm-card"><span class="ms idmm-ic" aria-hidden="true">gpp_bad</span><h2 id="idmmTitle">Ключи этого устройства не совпадают с сервером</h2>'
     + '<p class="idmm-text">Чтобы защитить переписку, отправка остановлена. Войдите заново.</p>'
     + '<button type="button" id="idmmGo">Выйти и войти заново</button><button type="button" id="idmmMore" class="link" aria-expanded="false">Подробнее</button>'
-    + '<div id="idmmBox" class="idmm-box" hidden><pre id="idmmInfo" class="idmm-info"></pre><button type="button" id="idmmCopy" class="link"><span class="ms s" aria-hidden="true">content_copy</span> Копировать</button></div></div>';
+    + '<div id="idmmBox" class="idmm-box" hidden><pre id="idmmInfo" class="idmm-info"></pre><button type="button" id="idmmCopy" class="link"><span class="ms s" aria-hidden="true">content_copy</span> Копировать</button>'
+    + '<button type="button" id="idmmAll" class="link danger-link">Выйти на всех устройствах</button><p id="idmmAllHint" class="idmm-hint"></p></div></div>';
   document.body.append(el);
   txt($('idmmInfo'), 'Код ошибки: ' + ((e && e.code) || 'E2E_IDENTITY_MISMATCH') + '\nУстройство: ' + ((e && e.deviceId) || (E2E && E2E.deviceId()) || '—') + '\nОтпечаток ключа в браузере: ' + ((e && e.localFp) || '—') + '\nОтпечаток ключа на сервере: ' + ((e && e.serverFp) || '—') + '\nСборка: ' + ((window.BUILD && window.BUILD.commit) || '—'));
   $('idmmCopy').onclick = () => navigator.clipboard.writeText($('idmmInfo').textContent).then(() => toast('Скопировано'), () => toast('Не удалось скопировать'));
   $('idmmMore').onclick = () => { const i = $('idmmBox'); i.hidden = !i.hidden; $('idmmMore').setAttribute('aria-expanded', String(!i.hidden)); };
-  $('idmmGo').onclick = async () => {
-    $('idmmGo').disabled = true;
+  const out = async scope => {
+    $('idmmGo').disabled = $('idmmAll').disabled = true;
     try { if (E2E && E2E.resetForRelogin) await E2E.resetForRelogin(); } catch (err) { console.warn('resetForRelogin', err); }
-    userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (err) { /* локальную сессию всё равно чистим */ }
+    userSignOut = true; try { await sb.auth.signOut({ scope }); } catch (err) { /* локальную сессию всё равно чистим */ }
     el.remove();
   };
+  $('idmmGo').onclick = () => out('local');
+  $('idmmAll').onclick = async () => { if (await askConfirm('Все устройства выйдут из аккаунта', 'Выйти везде')) await out('global'); };
+  // Вход через Google (пароля нет) — другая подсказка
+  sb.auth.getSession().then(({ data }) => {
+    const u = data && data.session && data.session.user, am = (u && u.app_metadata) || {};
+    const prov = Array.isArray(am.providers) ? am.providers : [am.provider].filter(Boolean);
+    const google = prov.includes('google') && !prov.includes('email');
+    txt($('idmmAllHint'), google ? 'Если вы не входили с других устройств, нажмите и проверьте безопасность аккаунта Google' : 'Если вы не входили с других устройств, нажмите и смените пароль');
+  }).catch(() => txt($('idmmAllHint'), 'Если вы не входили с других устройств, нажмите и смените пароль'));
   $('idmmGo').focus();
 }
 async function e2eStart() {
