@@ -123,16 +123,24 @@ async function findUser(n) {
   const { data, error } = await sb.from('profiles').select('*').eq('username', n).limit(1);
   return error ? { error } : { list: data || [] };
 }
+// Подсказка в «Глобальном поиске»: серая, красная только для неожиданных ошибок; текст через textContent (без HTML)
+function findHint(t, bad) {
+  fRes.replaceChildren(); const h = document.createElement('li'); h.className = 'sec'; txt(h, 'Глобальный поиск');
+  const li = document.createElement('li'); li.className = 'empty' + (bad ? ' bad' : ''); txt(li, t); fRes.append(h, li); fRes.hidden = false;
+}
 fIn.addEventListener('input', () => {
   clearTimeout(fTimer); const my = ++fSeq;
   const q = normNick(fIn.value);
-  if (!fIn.value.trim().startsWith('@') || !NICK_RE.test(q)) { fRes.hidden = true; fRes.replaceChildren(); return; }
+  if (!fIn.value.trim().startsWith('@') || !q) { fRes.hidden = true; fRes.replaceChildren(); return; }
+  if (!NICK_RE.test(q)) return findHint(/^[a-z0-9_]{1,4}$/.test(q) ? 'Введите имя пользователя полностью' : 'Имя: 5–32 символа, a–z, 0–9, _');
   fTimer = setTimeout(async () => {
     const { list: found, error } = await findUser(q);
     if (my !== fSeq) return;
     fRes.replaceChildren(); const h = document.createElement('li'); h.className = 'sec'; txt(h, 'Глобальный поиск'); fRes.append(h);
     const list = (found || []).filter(p => !me || p.id !== me.id).slice(0, 1);
-    if (error || !list.length) { const li = document.createElement('li'); li.className = 'empty'; txt(li, error ? (isRate(error) ? MSG.rate : ruErr(error)) : 'Пользователь не найден'); fRes.append(li); }
+    if (error && isRate(error)) return findHint(MSG.rate);
+    if (error) return findHint(ruErr(error), true);
+    if (!list.length) return findHint('Пользователь @' + q + ' не найден');
     for (const p of list) {
       const li = document.createElement('li'); li.tabIndex = 0;
       const a = document.createElement('span'); a.className = 'ava'; fillAvatar(a, p);
