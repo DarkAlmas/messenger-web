@@ -235,8 +235,7 @@ function renderChats() {
     const meta = document.createElement('div'); meta.className = 'meta';
     const nm = document.createElement('div'); nm.className = 'name'; txt(nm, c.kind === 'direct' ? (c.name || 'Личный чат') : (c.name || 'Группа'));
     const sub = document.createElement('div'); sub.className = 'sub';
-    txt(sub, c.last_sender ? (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? 'Файл' : '🔒 зашифрованное сообщение') : 'Нет сообщений');
-    if (c.last_sender && c.last_has_file) sub.prepend(msIcon('description', 'sub-ic'));
+    txt(sub, c.last_sender ? (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? '📎 Файл' : '🔒 зашифрованное сообщение') : 'Нет сообщений');
     sub.dataset.key = c.id + '|' + c.last_at; if (c.last_sender) filePreviewSoon(c, sub);
     meta.append(nm, sub); li.append(ava, meta);
     const side = document.createElement('div'); side.className = 'side-col';
@@ -628,6 +627,7 @@ function addReact(r, paint = true) {
 function previewOf(id) {
   const x = msgData[id]; if (!x) return 'Сообщение';
   if (!x.pl) return x.m.ciphertext ? '🔒 Зашифрованное сообщение' : (x.m.body || 'Сообщение');
+  if (x.pl.f && (x.pl.f.vk === 'voice' || x.pl.f.vk === 'round')) return prevOf(x.pl).text;
   return x.pl.t || (x.pl.f ? '📎 ' + (x.pl.f.n || 'файл') : 'Сообщение');
 }
 function fillQuote(q, id) {
@@ -1389,11 +1389,11 @@ function msIcon(name, cls) { const i = document.createElement('span'); i.classNa
 const lastPrev = {}; // chat_id + last_at → {icon, text}
 /** Текст превью в списке чатов по расшифрованному payload: фото → значок image + подпись, файл → description + имя, текст. */
 function prevOf(pl) {
-  if (pl.f && pl.f.vk === 'voice') return { icon: 'mic', text: 'Голосовое сообщение ' + fmtDur(pl.f.d) };
-  if (pl.f && pl.f.vk === 'round') return { icon: 'radio_button_unchecked', text: 'Видеосообщение' };
+  if (pl.f && pl.f.vk === 'voice') return { icon: null, text: '🎤 Голосовое ' + fmtDur(pl.f.d) };
+  if (pl.f && pl.f.vk === 'round') return { icon: null, text: '⭕ Видеосообщение' };
   if (!pl.f) return { icon: null, text: pl.t || '' };
   const cap = pl.caption || pl.t || '';
-  return imgMime(pl.f) ? { icon: 'image', text: cap || 'Фото' } : { icon: 'description', text: cap || safeName(pl.f.n) };
+  return imgMime(pl.f) ? { icon: 'image', text: cap || 'Фото' } : { icon: null, text: '📎 ' + (cap || safeName(pl.f.n)) };
 }
 /** Сообщение расшифровано в открытом чате (в т.ч. своё отправленное) — обновляем превью в списке, если оно последнее. */
 function notePreview(m, pl) {
