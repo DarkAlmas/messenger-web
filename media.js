@@ -348,9 +348,12 @@ function mediaKind(f) {
   const vk = typeof f.vk === 'string' ? f.vk.toLowerCase() : '';
   if (vk === 'voice' || vk === 'round') return vk;
   if (vk) return null;
-  const n = String(f.n || '').toLowerCase(), m = String(f.m || '').split(';')[0].trim().toLowerCase(), gen = !m || m === 'application/octet-stream';
-  if (n.startsWith('voice_') && (gen || m.startsWith('audio/') || m === 'video/webm' || /\.(webm|ogg|oga|opus|m4a|mp4|aac)$/.test(n))) return 'voice';
-  if ((n.startsWith('round_') || n.startsWith('video_note')) && (gen || m.startsWith('video/') || /\.(mp4|webm|mkv)$/.test(n))) return 'round';
+  // имя: n (или name у старых payload), без пути/пробелов; расширения: webm/ogg/oga/opus/m4a/mp4/mp3/aac/wav/weba/mkv (20.10: старые voice_*.webm/round_*.webm)
+  const n = String(f.n || f.name || '').toLowerCase().trim().split(/[\\/]/).pop().replace(/^(fwd|forwarded)[_\- ]+/, ''), m = String(f.m || '').split(';')[0].trim().toLowerCase();
+  const ext = /\.(webm|weba|ogg|oga|opus|m4a|mp4|m4v|mp3|aac|wav|mkv|3gp)$/.test(n), media = !m || m === 'application/octet-stream' || /^(audio|video)\//.test(m) || m === 'application/ogg';
+  if (!(ext || media) || /^(image|text)\//.test(m)) return null;
+  if (/^(voice|ptt|audio_note)[_\-]/.test(n)) return 'voice';
+  if (/^(round|video_note|videonote)[_\-]?/.test(n) && /^(round|video_?note)[_\-0-9.]/.test(n)) return 'round';
   return null;
 }
 window.mediaKind = mediaKind;
@@ -402,22 +405,33 @@ window.mediaEl = (f, m, fromOther) => {
     // круг ровно 200px; пока нет первого кадра — серый круг с ▶ (не чёрный); подпись состояния — ПОД кругом, серая, в одну строку
     const wrap = document.createElement('div'); wrap.className = 'round-wrap';
     const box = document.createElement('div'); box.className = 'round-v wait'; box.setAttribute('role', 'button'); box.setAttribute('aria-label', 'Видеосообщение ' + fmtDur(f.d) + ', нажмите для звука');
-    const v = document.createElement('video'); v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto'; v.setAttribute('playsinline', ''); v.disablePictureInPicture = true;
+    const v = document.createElement('video'); v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'metadata'; v.setAttribute('playsinline', ''); v.disablePictureInPicture = true;
     const ph = document.createElement('span'); ph.className = 'round-ph ms'; ph.setAttribute('aria-hidden', 'true'); txt(ph, 'play_arrow');
     const t = document.createElement('span'); t.className = 'round-dur'; txt(t, fmtDur(f.d));
     const cap = document.createElement('div'); cap.className = 'round-cap'; cap.hidden = true;
     box.append(v, ph, t); wrap.append(box, cap);
     const bad = msg => { box.classList.add('wait', 'broken'); txt(ph, 'videocam_off'); cap.hidden = false; txt(cap, msg); };
-    v.addEventListener('loadeddata', () => { box.classList.remove('wait'); cap.hidden = true; });
+    // 20.10: первый кадр. Чёрный круг был из-за того, что .wait снимался на loadeddata, а у webm из MediaRecorder кадр в t=0 ещё не
+    // декодирован (и Edge не рисует его без play/seek) → видно чёрное <video>. Теперь: seek 0.1 с → кадр в canvas → poster (blob:), затем показ.
+    let posterUrl = null;
+    const shown = () => { box.classList.remove('wait'); cap.hidden = true; };
+    const grab = () => { if (posterUrl || !v.videoWidth) return; try { const c = document.createElement('canvas'), z = Math.min(v.videoWidth, v.videoHeight, 400) || 200; c.width = c.height = z;
+      const sw = Math.min(v.videoWidth, v.videoHeight); c.getContext('2d').drawImage(v, (v.videoWidth - sw) / 2, (v.videoHeight - sw) / 2, sw, sw, 0, 0, z, z);
+      c.toBlob(b => { if (!b || posterUrl) return; posterUrl = URL.createObjectURL(b); v.poster = posterUrl; shown(); }, 'image/jpeg', 0.85); } catch { shown(); } };
+    v.addEventListener('loadedmetadata', () => { if (v.paused) try { v.currentTime = Math.min(0.1, (isFinite(v.duration) && v.duration > 0) ? v.duration / 2 : 0.1); } catch { /* */ } });
+    v.addEventListener('loadeddata', () => { if (v.currentTime >= 0.05) grab(); });
+    v.addEventListener('seeked', grab);
+    v.addEventListener('timeupdate', () => { if (v.currentTime >= 0.1) { grab(); shown(); } });
     let srcs = null, si = 0, started = false;
     // источники: тип по сигнатуре, затем запасные (mp4 / webm / matroska / без типа) — один и тот же расшифрованный Blob
     v.addEventListener('error', () => { if (srcs && ++si < srcs.length) { v.src = srcs[si]; v.load(); v.play().catch(() => {}); } else bad('Видео повреждено'); });
-    const start = () => { if (started) return; started = true; mediaSrcs(f).then(list => { srcs = list; si = 0; v.src = list[0]; v.load(); v.play().catch(() => { try { v.currentTime = 0.001; } catch { /* первый кадр */ } }); })
+    const start = () => { if (started) return; started = true; mediaSrcs(f).then(list => { srcs = list; si = 0; v.src = list[0]; v.load(); })
       .catch(e => { started = false; bad(e && e.corrupt ? 'Видео повреждено' : 'Не загрузилось — нажмите, чтобы повторить'); }); };
     start();
     box.onclick = ev => { ev.stopPropagation(); if (box.classList.contains('broken') && !started) { box.classList.remove('broken'); cap.hidden = true; return start(); } if (box.classList.contains('broken') || !v.src) return;
       const on = !box.classList.contains('playing'); box.classList.toggle('playing', on); v.muted = !on; v.loop = !on; v.currentTime = 0;
       v.play().catch(() => bad('Видео повреждено')); if (on && fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } };
+    v.addEventListener('seeked', () => { if (!box.classList.contains('playing') && v.paused && posterUrl) v.play().catch(() => {}); }, { once: false });
     v.onended = () => { box.classList.remove('playing'); v.muted = true; v.loop = true; v.play().catch(() => {}); };
     return wrap;
   }
