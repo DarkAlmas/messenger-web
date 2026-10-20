@@ -103,6 +103,24 @@ export const syncPending = () => deferredSync;
 export async function syncDeferred() { if (!deferredSync) return false; deferredSync = false; ready = null; await ensureReady(); return true; }
 const chk = ({ data, error }) => { if (error) throw error; return data; };
 export const deviceId = () => kv.dev || null;
+// Быстрый просмотр без блокировки и без запуска шифрования (20.10, Support Bot: ~10 с заглушек на новом устройстве).
+// Только чтение IndexedDB: сохранённый текст (pts:) или «конверта для этого устройства нет» — такие сообщения показываем сразу,
+// не дожидаясь генерации/загрузки ключей. Всё остальное → null, обычная расшифровка под блокировкой.
+let peekDb = null;
+export async function peek(m) {
+  try {
+    if (!m || !m.ciphertext || m.ciphertext.sk !== undefined) return null;
+    if (kv['pts:' + m.id]) return { pt: kv['pts:' + m.id] };
+    if (!peekDb) peekDb = idb();
+    const d = await peekDb;
+    const get = k => new Promise((res, rej) => { const r = d.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const pt = await get('pts:' + m.id); if (pt) return { pt };
+    let sid = null; try { sid = sessionId((await token()).access_token); } catch { return null; }
+    const dev = kv.dev || await get('dev'); let old = []; try { old = JSON.parse((kv.olddevs || await get('olddevs')) || '[]'); } catch { /* */ }
+    const mine = [sid, dev, ...old].filter(Boolean);
+    return mine.some(x => m.ciphertext[x]) ? null : { other: true };
+  } catch { return null; }
+}
 /** Выход из состояния IdentityMismatch: серверную строку не трогаем (ни перезаписи, ни удаления — это улика возможной подмены),
  *  только помечаем, что при следующем входе rebind в эту строку запрещён: устройство проходит обычную регистрацию с новым session_id.
  *  Доверие, расшифрованная история (pt:/pts:/ptg:) и резервная копия остаются (keep в ensureReadyFor). */

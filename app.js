@@ -425,7 +425,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261020d').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261020e').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -510,6 +510,7 @@ function decryptPayloadT(m, d) {
 async function decryptPayload(m) {
   const sig = ctSig(m.ciphertext);
   if (sig && sentOwn[sig]) return parsePayload(sentOwn[sig]);
+  try { const q = await (await e2eMod).peek(m); if (q && q.other) return { other: true }; if (q && q.pt) return parsePayload(q.pt); } catch { /* обычный путь */ }
   if (!(await e2eStart())) return e2eErr && e2eErr.name === 'LockBusy' ? { pending: true, busy: true } : null;
   try {
     if (m.ciphertext.sk !== undefined) {
