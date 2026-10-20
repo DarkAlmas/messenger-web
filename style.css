@@ -499,3 +499,30 @@ html:not(.ms-ready) .ms,html:not(.ms-ready) .settings-row__icon{color:transparen
 #ctxMenu.rx .ctx-actions button{min-height:44px;padding-top:0;padding-bottom:0;font-size:15px}
 #ctxMenu.rx .ctx-actions .ms{font-size:20px;width:20px}
 #messages .msg.ctx-lift{position:relative;z-index:3;box-shadow:0 0 0 200vmax rgba(0,0,0,.4)}
+/* 20.10 голосовое (Design Bot): кнопка 40, волна 40×2px, под волной слева длительность + скорость, справа внизу время и галочки */
+.msg.voice-msg{padding-bottom:6px}
+.voice.v2{display:flex;align-items:center;gap:10px;height:56px;max-width:100%;min-width:0;box-sizing:border-box;padding:0;white-space:normal}
+.voice.v2 .v-play{position:relative;width:40px;height:40px;min-height:40px;flex:none;border-radius:50%;border:0;padding:0;display:flex;align-items:center;justify-content:center;background:#4FC3F7;color:#fff;cursor:pointer}
+.msg.mine .voice.v2 .v-play{background:#fff;color:var(--bubble-out-bg)}
+.voice.v2 .v-play .ms{font-size:24px;position:relative}
+.voice.v2 .v-ring{position:absolute;inset:0;width:40px;height:40px;display:none}
+.voice.v2 .v-ring circle{fill:none;stroke:currentColor;stroke-width:2.5;stroke-dasharray:80 40;stroke-linecap:round}
+.voice.v2.loading .v-ring{display:block;animation:vspin 1s linear infinite}
+.voice.v2.loading .v-play .ms{font-size:18px}
+@keyframes vspin{to{transform:rotate(360deg)}}
+.voice.v2 .v-col{display:flex;flex-direction:column;justify-content:center;gap:4px;flex:1 1 auto;min-width:0}
+.voice.v2 .v-wave{display:flex;align-items:center;justify-content:space-between;gap:0;height:22px;cursor:pointer;touch-action:none;outline-offset:2px;overflow:visible}
+.voice.v2 .v-wave i{display:block;flex:none;width:2px;min-height:4px;border-radius:1px;background:#4FC3F7;opacity:.4;transition:opacity .1s}
+.msg.mine .voice.v2 .v-wave i{background:#fff}
+.voice.v2 .v-wave i.on{opacity:1}
+.voice.v2 .v-meta{display:flex;align-items:center;gap:6px;height:16px;font-size:12px;color:var(--bubble-in-meta,var(--muted))}
+.msg.mine .voice.v2 .v-meta{color:var(--bubble-out-meta)}
+.voice.v2 .v-dur{width:auto;text-align:left;font-size:12px;color:inherit}
+.voice.v2 .v-speed{min-height:0;height:16px;padding:0 6px;border:0;border-radius:8px;font-size:11px;font-weight:600;line-height:16px;background:rgba(127,127,127,.2);color:inherit;cursor:pointer}
+.voice.v2 .v-new{width:6px;height:6px;border-radius:50%;background:#4FC3F7;flex:none}
+.voice.v2 .v-new[hidden]{display:none}
+.msg.voice-msg > .foot{position:absolute;right:10px;bottom:6px;margin:0}
+.msg.voice-msg > .body[hidden]+.foot,.msg.voice-msg > .foot{line-height:16px}
+.rec-bar .rec-locked{display:none;font-size:18px}
+.rec-bar.locked .rec-locked{display:inline}
+.rec-bar.locked .rec-hint{display:none}

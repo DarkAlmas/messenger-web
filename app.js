@@ -576,7 +576,9 @@ function parsePayload(pt) {
   let o; try { o = JSON.parse(pt); } catch { return { t: pt }; }
   if (!o || typeof o !== 'object') return { t: String(pt) };
   // caption — подпись к вложению (отдельное поле того же payload; старые клиенты его игнорируют). t — показываемый текст
-  const f = o.f && typeof o.f === 'object' ? o.f : null, cap = f && typeof o.caption === 'string' ? o.caption.slice(0, 4000) : '';
+  let f = o.f && typeof o.f === 'object' ? o.f : null;
+  { const k = f && window.mediaKind && window.mediaKind(f); if (k && f.vk !== k) f = { ...f, vk: k }; } // вид: f.vk из payload, без него — по имени voice_/round_
+  const cap = f && typeof o.caption === 'string' ? o.caption.slice(0, 4000) : '';
   return { t: (o.t || '') || cap, t0: o.t || '', caption: cap, f, fw: typeof o.fw === 'string' ? o.fw.slice(0, 64) : null };
 }
 const DECRYPT_WAIT = 8000;
@@ -888,7 +890,8 @@ async function doForward(target) {
     const fw = x.pl.fw || (x.m.sender_id === me.id ? displayName(profiles[me.id]) : displayName(profiles[x.m.sender_id]));
     if (x.pl.f) {
       const plain = await fetchFilePlain(x.pl.f); // расшифровали — и ниже заново шифруем новым ключом AES и для нового чата
-      await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.caption || x.pl.t || '', fw);
+      const vk = window.mediaKind ? window.mediaKind(x.pl.f) : null; // пересылка сохраняет вид (голосовое/кружок), длительность и волну — внутри шифротекста
+      await sendFile(target, new File([plain], x.pl.f.n || 'file', { type: x.pl.f.m || 'application/octet-stream' }), { forwarded: true }, x.pl.caption || x.pl.t || '', fw, vk ? { media: { vk, d: x.pl.f.d, ...(Array.isArray(x.pl.f.w) ? { w: x.pl.f.w.slice(0, 64) } : {}) } } : undefined);
     } else await sendPayload(target, JSON.stringify({ v: 1, t: x.pl.t, fw }), { forwarded: true });
     toast('Переслано');
     if (!currentChat || currentChat.id !== target.id) loadChatsSoon();
@@ -1412,7 +1415,8 @@ async function sendFile(chat, file, extra, caption, fw, job) {
   if (job && job.media) Object.assign(f, job.media); // vk: voice|round, d: длительность, w: волна — внутри шифротекста
   // подпись — только внутри зашифрованного payload (поле caption), на сервер открытым текстом не уходит
   extra = { ...(extra || {}), attachment_path: path }; // только путь: имя, размер и тип — внутри шифротекста
-  const pl = { v: 1, t: '', f }; if (caption) pl.caption = String(caption).slice(0, 4000); if (fw) pl.fw = fw;
+  // подпись: Android (ChatActivity/textOf) читает её из t, прежний сайт — из caption; пишем в оба поля (20.10, «Ну вот, как-то так» терялась)
+  const cap = caption ? String(caption).slice(0, 4000) : ''; const pl = { v: 1, t: cap, f }; if (cap) pl.caption = cap; if (fw) pl.fw = fw;
   if (job) {
     try { return await sendPayload(chat, JSON.stringify(pl), extra); }
     catch (e) { // объект удаляем, только если проверка подтвердила, что строки нет; иначе оставляем и повтор использует тот же путь

@@ -108,8 +108,16 @@ function tickConn() {
   paintNetLine();
 }
 let reviveAt = 0;
+async function tokenSoon(ms = 60000) { try { const s = (await sb.auth.getSession()).data.session; return !!(s && s.expires_at && s.expires_at * 1000 < Date.now() + ms); } catch { return false; } }
+// заранее: за 5 минут до истечения обновляем сессию (и токен Realtime), чтобы соединение не рвалось раз в час
+setInterval(() => { if (me && navigator.onLine && document.visibilityState === 'visible') tokenSoon(5 * 60000).then(soon => { if (soon && typeof rtRecover === 'function') rtRecover(); }); }, 60000);
 function revive() { // канал упал окончательно (chan = null после ошибки) — пересоздаём, не чаще раза в 10 с
   if (!navigator.onLine || Date.now() - reviveAt < 10000) return; reviveAt = Date.now();
+  // 20.10: autoRefreshToken выключен — через час токен Realtime истекает, сервер закрывает канал, а повторный вход идёт со старым
+  // токеном и «Соединение…» висит. Истёк или истекает — обновляем сессию и передаём новый токен в Realtime (rtRecover в app.js).
+  tokenSoon().then(soon => { if (soon && typeof rtRecover === 'function') rtRecover(); });
+  // канал «inbox» застрял в joining дольше 20 с — пересоздаём
+  if (inboxChan && inboxChan.state === 'joining') { inboxChan.__j = inboxChan.__j || Date.now(); if (Date.now() - inboxChan.__j > 20000) { watchInbox(); return; } } else if (inboxChan) inboxChan.__j = 0;
   try { if (!sb.realtime.isConnected()) sb.realtime.connect(); } catch { /* */ }
   if (!inboxChan || inboxChan.state === 'closed' || inboxChan.state === 'errored') watchInbox();
 }
@@ -267,13 +275,13 @@ async function startRec(mode) {
     if (s >= MAX_REC) stopRec(true);
   }, 100);
 }
-function lockRec() { if (!rec) return; rec.locked = true; $('recLock').hidden = false; txt($('recCancel'), 'Отмена'); $('recCancel').style.transform = ''; }
+function lockRec() { if (!rec) return; rec.locked = true; $('recLock').hidden = false; $('recBar').classList.add('locked'); txt($('recCancel'), 'Отмена'); $('recCancel').style.transform = ''; }
 $('recCancel').onclick = () => { if (rec) stopRec(false); };
 $('recSend').onclick = () => { if (rec) stopRec(true); };
 function stopRec(send) {
   const r = rec; if (!r) return; rec = null; clearInterval(r.timer);
   const dur = Math.max(1, Math.round((Date.now() - r.t0) / 1000));
-  $('recBar').hidden = true; $('sendForm').classList.remove('recording'); $('roundBox').hidden = true; $('roundPrev').srcObject = null; txt($('recCancel'), '‹ Отмена');
+  $('recBar').hidden = true; $('recBar').classList.remove('locked'); $('sendForm').classList.remove('recording'); $('roundBox').hidden = true; $('roundPrev').srcObject = null; txt($('recCancel'), '‹ Влево — отмена');
   r.mr.onstop = () => {
     r.stream.getTracks().forEach(t => t.stop()); try { r.ac && r.ac.close(); } catch { /* */ }
     if (!send) return toast('Запись отменена', 1500);
@@ -289,12 +297,14 @@ function stopRec(send) {
   };
   try { r.mr.stop(); } catch { r.mr.onstop(); }
 }
+// мышь/клавиатура на компьютере: Esc — отмена, Enter — отправить (в т.ч. после 🔒)
+document.addEventListener('keydown', e => { if (!rec) return; if (e.key === 'Escape') { e.preventDefault(); stopRec(false); } else if (e.key === 'Enter' && rec.locked) { e.preventDefault(); stopRec(true); } }, true);
 window.__rec = { start: m => startRec(m), stop: s => stopRec(s) }; // для тестов
 function squash(w, n) { if (!w.length) return Array(n).fill(2); const mx = Math.max(...w, 1), out = []; for (let i = 0; i < n; i++) { const a = Math.floor(i * w.length / n), b = Math.max(a + 1, Math.floor((i + 1) * w.length / n)); let m = 0; for (let j = a; j < b; j++) m = Math.max(m, w[j] || 0); out.push(Math.max(1, Math.round(m / mx * 15))); } return out; }
 window.squashWave = squash;
 
 // ---------- воспроизведение ----------
-const mediaUrls = {};
+const mediaUrls = {}, mediaBytes = {}; // mediaBytes: расшифрованные байты для пиков волны (fetch(blob:) запрещён CSP connect-src)
 // Тип для воспроизведения — по сигнатуре файла (Android Chrome пишет video/x-matroska;codecs=avc1 и т.п.; octet-stream <video> не играет),
 // затем по сохранённому типу из шифротекста, затем по виду (голос/кружок)
 function playMime(f, p) {
@@ -331,6 +341,19 @@ function avKind(f) {
   return null;
 }
 window.avKind = avKind;
+/** Вид вложения: основной источник — f.vk внутри расшифрованного payload (Android: 'voice' | 'round', d — секунды, w — 40 уровней 1..15,
+ *  m — audio/mp4 или video/mp4). Только если vk нет — запасной вариант по имени (как Notify.java): voice_* (аудио), round_* / video_note*. */
+function mediaKind(f) {
+  if (!f || typeof f !== 'object') return null;
+  const vk = typeof f.vk === 'string' ? f.vk.toLowerCase() : '';
+  if (vk === 'voice' || vk === 'round') return vk;
+  if (vk) return null;
+  const n = String(f.n || '').toLowerCase(), m = String(f.m || '').split(';')[0].trim().toLowerCase(), gen = !m || m === 'application/octet-stream';
+  if (n.startsWith('voice_') && (gen || m.startsWith('audio/') || m === 'video/webm' || /\.(webm|ogg|oga|opus|m4a|mp4|aac)$/.test(n))) return 'voice';
+  if ((n.startsWith('round_') || n.startsWith('video_note')) && (gen || m.startsWith('video/') || /\.(mp4|webm|mkv)$/.test(n))) return 'round';
+  return null;
+}
+window.mediaKind = mediaKind;
 window.fileMediaEl = (f0, download) => {
   const av = avKind(f0); if (!av || !f0.p) return null;
   const f = { ...f0, m: av.m };
@@ -370,7 +393,7 @@ window.fileMediaEl = (f0, download) => {
   };
   return box;
 };
-function mediaUrl(f) { if (f.local) return Promise.resolve(f.local); /* своё неотправленное — из записанного Blob */ return mediaUrls[f.p] = mediaUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: playMime(f, p) }))).catch(e => { delete mediaUrls[f.p]; throw e; }); }
+function mediaUrl(f) { if (f.local) return Promise.resolve(f.local); /* своё неотправленное — из записанного Blob */ return mediaUrls[f.p] = mediaUrls[f.p] || fetchFilePlain(f).then(p => { mediaBytes[f.p] = p; return p; }).then(p => URL.createObjectURL(new Blob([p], { type: playMime(f, p) }))).catch(e => { delete mediaUrls[f.p]; throw e; }); }
 const heardKey = id => 'msgr-heard:' + id;
 const isHeard = id => { try { return !!localStorage.getItem(heardKey(id)); } catch { return false; } };
 let playing = null;
@@ -398,26 +421,82 @@ window.mediaEl = (f, m, fromOther) => {
     v.onended = () => { box.classList.remove('playing'); v.muted = true; v.loop = true; v.play().catch(() => {}); };
     return wrap;
   }
-  const row = document.createElement('div'); row.className = 'voice' + (!fromOther || isHeard(m.id) ? ' heard' : '');
-  const btn = iconBtn('play_arrow', 'Воспроизвести голосовое', 'v-play');
-  const wave = document.createElement('div'); wave.className = 'v-wave';
-  for (const h of (Array.isArray(f.w) ? f.w.slice(0, 64) : Array(40).fill(3))) { const i = document.createElement('i'); i.style.height = (3 + Math.max(0, Math.min(15, +h || 0)) * 1.4) + 'px'; wave.append(i); }
+  return voiceEl(f, m, fromOther);
+};
+// ---------- голосовое (Design Bot 20.10, как native v13) ----------
+// Волна: сохранённые при записи уровни f.w (общий формат с Android: до 64 целых 1..15, пишем 40) → иначе пики из
+// decodeAudioData после расшифровки (кэш в localStorage этого браузера, на сервер не уходит).
+const SPEEDS = [1, 1.5, 2], SPEED_KEY = 'msgr-vspeed', NBARS = 40;
+const getSpeed = () => { const v = +(localStorage.getItem(SPEED_KEY) || 1); return SPEEDS.includes(v) ? v : 1; };
+const peakKey = id => 'msgr-peaks:' + id;
+function cachedPeaks(id) { try { const a = JSON.parse(localStorage.getItem(peakKey(id)) || 'null'); return Array.isArray(a) && a.length === NBARS ? a : null; } catch { return null; } }
+function resample(w) { const src = w.map(x => Math.max(0, Math.min(15, +x || 0))); if (src.length === NBARS) return src; const out = []; for (let i = 0; i < NBARS; i++) { const a = Math.floor(i * src.length / NBARS), b = Math.max(a + 1, Math.floor((i + 1) * src.length / NBARS)); let mx = 0; for (let j = a; j < b && j < src.length; j++) mx = Math.max(mx, src[j]); out.push(mx); } return out; }
+async function decodePeaks(bytes) {
+  if (!bytes) return null; const buf = new Uint8Array(bytes).slice().buffer, AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+  const ac = new AC(); try { const ab = await ac.decodeAudioData(buf), ch = ab.getChannelData(0), out = [], step = Math.max(1, Math.floor(ch.length / NBARS));
+    for (let i = 0; i < NBARS; i++) { let mx = 0; for (let j = i * step, e = Math.min(ch.length, j + step); j < e; j += 8) mx = Math.max(mx, Math.abs(ch[j])); out.push(mx); }
+    const top = Math.max(...out, 1e-4); return out.map(x => Math.max(1, Math.round(x / top * 15))); } finally { try { ac.close(); } catch { /* */ } } }
+const barH = h => Math.round(4 + Math.max(0, Math.min(15, h)) / 15 * 18); // 4..22 px
+function voiceEl(f, m, fromOther) {
+  const unheard = fromOther && !isHeard(m.id);
+  const row = document.createElement('div'); row.className = 'voice v2' + (unheard ? '' : ' heard');
+  row.style.width = Math.round(180 + Math.min(1, Math.max(0, (+f.d || 1) - 1) / 59) * 80) + 'px'; // 180..260 по длительности (1..60 с)
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'v-play'; btn.setAttribute('aria-label', 'Воспроизвести голосовое ' + fmtDur(f.d));
+  btn.innerHTML = '<svg class="v-ring" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="17"/></svg><span class="ms" aria-hidden="true">play_arrow</span>';
+  const ico = btn.querySelector('.ms'), setIco = n => txt(ico, n);
+  const col = document.createElement('div'); col.className = 'v-col';
+  const wave = document.createElement('div'); wave.className = 'v-wave'; wave.tabIndex = 0; wave.setAttribute('role', 'slider'); wave.setAttribute('aria-label', 'Перемотка голосового');
+  wave.setAttribute('aria-valuemin', '0'); wave.setAttribute('aria-valuemax', String(Math.round(+f.d || 0))); wave.setAttribute('aria-valuenow', '0');
+  const bars = []; for (let i = 0; i < NBARS; i++) { const b = document.createElement('i'); wave.append(b); bars.push(b); }
+  const paintBars = lv => lv.forEach((h, i) => { bars[i].style.height = barH(h) + 'px'; });
+  const stored = Array.isArray(f.w) && f.w.length ? resample(f.w) : null;
+  paintBars(stored || cachedPeaks(m.id) || Array(NBARS).fill(2));
+  const meta = document.createElement('div'); meta.className = 'v-meta';
   const dur = document.createElement('span'); dur.className = 'v-dur'; txt(dur, fmtDur(f.d));
-  row.append(btn, wave, dur);
-  let au = null;
-  const paintProg = () => { if (!au || !au.duration || !isFinite(au.duration)) return; const k = au.currentTime / au.duration, bars = wave.children; for (let i = 0; i < bars.length; i++) bars[i].classList.toggle('on', i / bars.length < k); txt(dur, fmtDur(au.currentTime)); };
+  const sp = document.createElement('button'); sp.type = 'button'; sp.className = 'v-speed'; const paintSp = () => { txt(sp, getSpeed() + 'x'); sp.setAttribute('aria-label', 'Скорость ' + getSpeed() + 'x'); }; paintSp();
+  const dot = document.createElement('span'); dot.className = 'v-new'; dot.hidden = !unheard; dot.setAttribute('aria-label', 'Не прослушано');
+  meta.append(dur, sp, dot); col.append(wave, meta); row.append(btn, col);
+  let au = null, loading = null, raf = 0, total = +f.d || 0;
+  const prog = () => { const d = au && isFinite(au.duration) && au.duration > 0 ? au.duration : total; const t = au ? au.currentTime : 0, k = d ? Math.min(1, t / d) : 0;
+    const on = k * NBARS; for (let i = 0; i < NBARS; i++) { bars[i].classList.toggle('on', i < Math.floor(on)); bars[i].style.setProperty('--p', i === Math.floor(on) ? String(on - i) : ''); }
+    wave.setAttribute('aria-valuenow', String(Math.round(t))); txt(dur, au && !au.paused ? fmtDur(Math.max(0, d - t)) : (t > 0 && t < d ? fmtDur(Math.max(0, d - t)) : fmtDur(total))); };
+  const loop = () => { prog(); if (au && !au.paused) raf = requestAnimationFrame(loop); };
+  const markHeard = () => { if (!fromOther) return; row.classList.add('heard'); dot.hidden = true; try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } };
+  async function ensure() {
+    if (au) return au;
+    if (loading) return loading;
+    const my = loading = (async () => {
+      row.classList.add('loading'); setIco('close'); btn.setAttribute('aria-label', 'Отменить загрузку');
+      const url = await mediaUrl(f);
+      if (loading !== my) throw Object.assign(new Error('cancel'), { cancel: true });
+      const a = new Audio(url); a.playbackRate = getSpeed();
+      a.onplay = () => { setIco('pause'); btn.setAttribute('aria-label', 'Пауза'); cancelAnimationFrame(raf); loop(); };
+      a.onpause = () => { setIco('play_arrow'); btn.setAttribute('aria-label', 'Воспроизвести голосовое'); prog(); };
+      a.onended = () => { setIco('play_arrow'); a.currentTime = 0; prog(); };
+      a.onloadedmetadata = () => { if (isFinite(a.duration) && a.duration > 0) total = a.duration; prog(); };
+      const bytes = mediaBytes[f.p]; delete mediaBytes[f.p];
+      if (!stored && !cachedPeaks(m.id)) decodePeaks(bytes).then(p => { if (p) { paintBars(p); try { localStorage.setItem(peakKey(m.id), JSON.stringify(p)); } catch { /* */ } } }).catch(() => {});
+      au = a; return a;
+    })().finally(() => { if (loading === my) loading = null; row.classList.remove('loading'); if (!au) { setIco('play_arrow'); btn.setAttribute('aria-label', 'Воспроизвести голосовое'); } });
+    return my;
+  }
+  async function play() { const a = await ensure(); if (playing && playing !== a) playing.pause(); playing = a; a.playbackRate = getSpeed(); await a.play(); markHeard(); }
   btn.onclick = async ev => {
     ev.stopPropagation();
+    if (loading) { loading = null; row.classList.remove('loading'); setIco('play_arrow'); return; } // крестик — отмена загрузки
     if (au && !au.paused) { au.pause(); return; }
-    btn.disabled = true;
-    try {
-      if (!au) { au = new Audio(await mediaUrl(f)); au.ontimeupdate = paintProg; au.onplay = () => { txt(btn.querySelector('.ms'), 'pause'); }; au.onpause = () => txt(btn.querySelector('.ms'), 'play_arrow'); au.onended = () => { txt(btn.querySelector('.ms'), 'play_arrow'); txt(dur, fmtDur(f.d)); wave.querySelectorAll('i').forEach(i => i.classList.remove('on')); }; }
-      if (playing && playing !== au) playing.pause(); playing = au;
-      await au.play();
-      if (fromOther) { row.classList.add('heard'); try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } }
-    } catch (e) { toastLong(e.userMsg || 'Не удалось воспроизвести: ' + ruErr(e)); }
-    finally { btn.disabled = false; }
+    try { await play(); } catch (e) { if (!e.cancel) toastLong(e.userMsg || 'Не удалось воспроизвести: ' + ruErr(e)); }
   };
+  sp.onclick = ev => { ev.stopPropagation(); const v = SPEEDS[(SPEEDS.indexOf(getSpeed()) + 1) % SPEEDS.length]; try { localStorage.setItem(SPEED_KEY, String(v)); } catch { /* */ } if (au) au.playbackRate = v; document.querySelectorAll('.voice.v2 .v-speed').forEach(b => { txt(b, v + 'x'); b.setAttribute('aria-label', 'Скорость ' + v + 'x'); }); };
+  const seekTo = async fr => { fr = Math.max(0, Math.min(1, fr)); try { const a = await ensure(); const d = isFinite(a.duration) && a.duration > 0 ? a.duration : total; a.currentTime = fr * d; prog(); if (a.paused) await play(); } catch (e) { if (!e.cancel) toast('Не удалось перемотать', 2000); } };
+  const frOf = e => { const r = wave.getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
+  let drag = false;
+  wave.addEventListener('pointerdown', e => { e.stopPropagation(); drag = true; try { wave.setPointerCapture(e.pointerId); } catch { /* */ } seekTo(frOf(e)); });
+  wave.addEventListener('pointermove', e => { if (drag && au) { const d = isFinite(au.duration) ? au.duration : total; au.currentTime = Math.max(0, Math.min(1, frOf(e))) * d; prog(); } });
+  wave.addEventListener('pointerup', () => { drag = false; }); wave.addEventListener('pointercancel', () => { drag = false; });
+  wave.addEventListener('click', e => e.stopPropagation());
+  wave.addEventListener('keydown', e => { if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return; e.preventDefault(); const d = (au && isFinite(au.duration) ? au.duration : total) || 1, t = au ? au.currentTime : 0; seekTo((t + (e.key === 'ArrowRight' ? 5 : -5)) / d); });
   return row;
-};
+}
+window.voiceEl = voiceEl; window.__decodePeaks = decodePeaks;
 })();
