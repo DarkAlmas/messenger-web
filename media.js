@@ -290,18 +290,37 @@ window.squashWave = squash;
 
 // ---------- воспроизведение ----------
 const mediaUrls = {};
-function mediaUrl(f) { return mediaUrls[f.p] = mediaUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: /^(audio|video)\/(webm|mp4|ogg|mpeg)$/.test(f.m) ? f.m : 'application/octet-stream' }))).catch(e => { delete mediaUrls[f.p]; throw e; }); }
+// Тип для воспроизведения — по сигнатуре файла (Android Chrome пишет video/x-matroska;codecs=avc1 и т.п.; octet-stream <video> не играет),
+// затем по сохранённому типу из шифротекста, затем по виду (голос/кружок)
+function playMime(f, p) {
+  const vid = f.vk === 'round' || /^video\//.test(f.m || '');
+  const b = p && p.length > 12 ? p : null;
+  if (b && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return vid ? 'video/webm' : 'audio/webm'; // EBML: webm / matroska
+  if (b && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return vid ? 'video/mp4' : 'audio/mp4'; // ftyp
+  if (b && b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return vid ? 'video/ogg' : 'audio/ogg';
+  const m = String(f.m || '').split(';')[0].trim().toLowerCase().replace('x-matroska', 'webm');
+  if (/^(audio|video)\/(webm|mp4|ogg|mpeg|aac)$/.test(m)) return m;
+  return vid ? 'video/webm' : 'audio/webm';
+}
+window.playMime = playMime;
+function mediaUrl(f) { if (f.local) return Promise.resolve(f.local); /* своё неотправленное — из записанного Blob */ return mediaUrls[f.p] = mediaUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: playMime(f, p) }))).catch(e => { delete mediaUrls[f.p]; throw e; }); }
 const heardKey = id => 'msgr-heard:' + id;
 const isHeard = id => { try { return !!localStorage.getItem(heardKey(id)); } catch { return false; } };
 let playing = null;
 window.mediaEl = (f, m, fromOther) => {
   if (f.vk === 'round') {
-    const box = document.createElement('div'); box.className = 'round-v'; box.setAttribute('role', 'button'); box.setAttribute('aria-label', 'Видеосообщение ' + fmtDur(f.d) + ', нажмите для звука');
-    const v = document.createElement('video'); v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
+    // 200px круг; пока нет первого кадра — серый круг с ▶ (никогда не чёрный); при ошибке — то же с подписью
+    const box = document.createElement('div'); box.className = 'round-v wait'; box.setAttribute('role', 'button'); box.setAttribute('aria-label', 'Видеосообщение ' + fmtDur(f.d) + ', нажмите для звука');
+    const v = document.createElement('video'); v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto'; v.setAttribute('playsinline', ''); v.disablePictureInPicture = true;
+    const ph = document.createElement('span'); ph.className = 'round-ph ms'; ph.setAttribute('aria-hidden', 'true'); txt(ph, 'play_arrow');
     const t = document.createElement('span'); t.className = 'round-dur'; txt(t, fmtDur(f.d));
-    box.append(v, t);
-    mediaUrl(f).then(u => { v.src = u; v.play().catch(() => {}); }).catch(() => txt(t, 'не загрузилось'));
-    box.onclick = ev => { ev.stopPropagation(); const big = !box.classList.contains('big'); box.classList.toggle('big', big); v.muted = !big; v.loop = !big; v.currentTime = 0; v.play().catch(() => {}); if (big && fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } };
+    box.append(v, ph, t);
+    v.addEventListener('loadeddata', () => box.classList.remove('wait'));
+    v.addEventListener('error', () => { box.classList.add('wait'); txt(t, 'не воспроизводится'); });
+    let started = false;
+    const start = () => { if (started) return; started = true; mediaUrl(f).then(u => { v.src = u; v.load(); v.play().catch(() => { try { v.currentTime = 0.001; } catch { /* первый кадр как превью */ } }); }).catch(() => { started = false; txt(t, 'не загрузилось'); }); };
+    start();
+    box.onclick = ev => { ev.stopPropagation(); if (!v.src) return start(); const big = !box.classList.contains('big'); box.classList.toggle('big', big); v.muted = !big; v.loop = !big; v.currentTime = 0; v.play().catch(e => toast('Не удалось воспроизвести: ' + (e && e.message || e), 3000)); if (big && fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } };
     v.onended = () => { box.classList.remove('big'); v.muted = true; v.loop = true; v.play().catch(() => {}); };
     return box;
   }

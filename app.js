@@ -316,7 +316,10 @@ function notifText(pl) {
 const fmtDur = d => { d = Math.max(0, Math.round(+d || 0)); return Math.floor(d / 60) + ':' + String(d % 60).padStart(2, '0'); };
 document.addEventListener('visibilitychange', clearBadge);
 function toastLong(s) { toast(String(s), 4000); }
-function toast(s, ms = 2500) { const t = $('toast'); txt(t, s); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms); }
+function toast(s, ms = 2500) { const t = $('toast'); txt(t, s);
+  // в открытом чате — внизу над полем ввода, не поверх пузырей (дизайн 20.10)
+  const f = $('sendForm'), r = f && !f.hidden && f.offsetParent !== null ? f.getBoundingClientRect() : null; t.style.bottom = r && r.height ? Math.max(8, Math.round(innerHeight - r.top + 8)) + 'px' : '';
+  t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms); }
 
 // ---------- контекстное меню (правый клик / долгое нажатие) ----------
 function openMenu(e, items) {
@@ -543,7 +546,7 @@ async function renderMsg(m, d) {
       b.className = 'body'; txt(b, pl.t); if (!pl.t) b.hidden = true;
       window.cacheMsg?.(m, pl);
       if (!mine) { sendDlv(m); seenIO.observe(d); }
-      if (pl.f && (pl.f.vk === 'voice' || pl.f.vk === 'round') && window.mediaEl) { d.insertBefore(mediaEl(pl.f, m, !mine), b); d.classList.add(pl.f.vk === 'round' ? 'round-msg' : 'voice-msg'); }
+      if (pl.f && (pl.f.vk === 'voice' || pl.f.vk === 'round') && window.mediaEl) { d.querySelectorAll(':scope > .round-v, :scope > .voice').forEach(x => x.remove()); /* повторная отрисовка (эхо своего, расшифровка) — без второго круга */ d.insertBefore(mediaEl(pl.f, m, !mine), b); d.classList.add(pl.f.vk === 'round' ? 'round-msg' : 'voice-msg'); }
       else if (pl.f) {
         const fb = fileRow(pl.f, !mine);
         const pv = imagePreview(pl.f, pl.t, !mine, bad => { pv.replaceWith(bad ? brokenRow(pl.f) : fb); d.classList.remove('has-img', 'img-only'); });
@@ -1126,7 +1129,11 @@ function outBubble(job) {
     const pv = document.createElement('div'); pv.className = 'img-prev'; const im = document.createElement('img'); im.alt = safeName(job.file.name);
     im.src = job.localUrl = URL.createObjectURL(job.file); pv.append(im); d.append(pv); d.classList.add('has-img'); if (!job.caption) d.classList.add('img-only');
   }
-  const b = document.createElement('span'); b.className = 'body'; txt(b, job.kind === 'text' ? job.text : job.media ? (job.media.vk === 'voice' ? '🎤 Голосовое сообщение ' + fmtDur(job.media.d) : '⭕ Видеосообщение') : (job.caption || (d.classList.contains('has-img') ? '' : job.file.name))); if (!b.textContent) b.hidden = true; d.append(b);
+  // голосовое/кружок в очереди или с ошибкой — сразу настоящий плеер (▶, волна, длительность) или круглое превью из записанного Blob;
+  // текстовая подпись «🎤 …» — только для списка чатов и уведомлений
+  const isMedia = job.media && (job.media.vk === 'voice' || job.media.vk === 'round') && window.mediaEl;
+  if (isMedia) { job.localUrl = job.localUrl || URL.createObjectURL(job.file); d.append(mediaEl({ ...job.media, m: (job.file.type || '').split(';')[0], p: 'local:' + job.id, local: job.localUrl }, { id: job.id }, false)); d.classList.add(job.media.vk === 'round' ? 'round-msg' : 'voice-msg'); }
+  const b = document.createElement('span'); b.className = 'body'; txt(b, job.kind === 'text' ? job.text : isMedia ? '' : (job.caption || (d.classList.contains('has-img') ? '' : job.file.name))); if (!b.textContent) b.hidden = true; d.append(b);
   const foot = document.createElement('div'); foot.className = 'foot';
   const tm = document.createElement('time'); txt(tm, fmtTime(d.dataset.at)); const t = document.createElement('span'); t.className = 'ticks';
   foot.append(tm, t); d.append(foot);
@@ -1165,7 +1172,7 @@ async function outRun0(job, fresh) {
     job.waitNet = false; job.flushing = false;
     if (el && el.dataset.state) { el.dataset.state = 'failed'; paintTicks(el); }
     window.saveOutbox?.(); // после перезагрузки — красное с «Повторить», без автоотправки
-    if (!job.toasted && !(err && err.quiet)) { job.toasted = true; toast(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err), 6000); } // тост один раз на сообщение
+    if (!job.toasted && !(err && err.quiet)) { job.toasted = true; toast(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err), 3000); } // тост один раз на сообщение
     return false;
   }
 }
