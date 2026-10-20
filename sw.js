@@ -1,5 +1,5 @@
 /* Service worker: офлайн-оболочка сайта (network-first), уведомления, Web Push. */
-const VER = '20261020g'; // меняется с каждой правкой sw.js → браузер ставит новый SW
+const VER = '20261020h'; // меняется с каждой правкой sw.js → браузер ставит новый SW
 const CACHE = 'msgr-shell-' + VER;
 // Установка: кладём в кэш ВСЮ оболочку (index + все скрипты/стили из него + модули E2E + CDN), иначе первая офлайн-перезагрузка не грузит app.js и др.
 const EXTRA = ['./', 'index.html', 'e2e.js?v=20261020d', 'vendor/sigwasm/sigwasm.js?v=20261014k', 'vendor/sigwasm/sigwasm_bg.wasm?v=20261014k', 'fonts/material-symbols-rounded.woff2?v=8'];

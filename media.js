@@ -238,7 +238,10 @@ micBtn.addEventListener('pointercancel', () => { clearTimeout(holdT); if (rec &&
 micBtn.addEventListener('contextmenu', e => e.preventDefault());
 let recAbort = false;
 function pickMime(kind) {
-  const list = kind === 'voice' ? ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'] : ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+  // Android: сначала mp4 (H.264/AAC — гарантированно воспроизводится тем же Chrome), затем webm vp8/opus
+  const android = /Android/i.test(navigator.userAgent || '');
+  const list = kind === 'voice' ? ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+    : android ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm'] : ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
   return list.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
 }
 async function startRec(mode) {
@@ -250,7 +253,7 @@ async function startRec(mode) {
   if (recAbort) { stream.getTracks().forEach(t => t.stop()); return toast('Удерживайте кнопку, чтобы записать', 2000); }
   const mime = pickMime(mode), mr = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000, ...(mode === 'round' ? { videoBitsPerSecond: 600000 } : {}) } : undefined);
   rec = { mr, stream, chunks: [], t0: Date.now(), mode, locked: false, cancelled: false, wave: [], chat: currentChat };
-  mr.ondataavailable = ev => { if (ev.data && ev.data.size) rec && rec.chunks.push(ev.data); };
+  const r0 = rec; mr.ondataavailable = ev => { if (ev.data && ev.data.size) r0.chunks.push(ev.data); }; // в замыкание: последний кусок приходит ПОСЛЕ stop(), когда rec уже null
   try { const ac = new AudioContext(), an = ac.createAnalyser(); an.fftSize = 256; ac.createMediaStreamSource(stream).connect(an); rec.ac = ac; rec.an = an; } catch { /* без волны */ }
   mr.start(250);
   $('recBar').hidden = false; $('sendForm').classList.add('recording'); $('recLock').hidden = true; $('recCancel').style.transform = '';
@@ -278,6 +281,7 @@ function stopRec(send) {
     const type = (r.mr.mimeType || (r.mode === 'voice' ? 'audio/webm' : 'video/webm')).split(';')[0];
     const blob = new Blob(r.chunks, { type }), ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
     if (blob.size > MAX_FILE) return toastLong('Запись больше 25 МБ');
+    if (!r.chunks.length || blob.size < (r.mode === 'voice' ? 500 : 2000)) return toastLong('Запись не получилась (пустые данные с ' + (r.mode === 'voice' ? 'микрофона' : 'камеры') + '), попробуйте ещё раз');
     const file = new File([blob], (r.mode === 'voice' ? 'voice_' : 'round_') + Date.now() + '.' + ext, { type });
     const media = { vk: r.mode, d: Math.min(MAX_REC, dur) };
     if (r.mode === 'voice') media.w = squash(r.wave, 40);
@@ -285,6 +289,7 @@ function stopRec(send) {
   };
   try { r.mr.stop(); } catch { r.mr.onstop(); }
 }
+window.__rec = { start: m => startRec(m), stop: s => stopRec(s) }; // для тестов
 function squash(w, n) { if (!w.length) return Array(n).fill(2); const mx = Math.max(...w, 1), out = []; for (let i = 0; i < n; i++) { const a = Math.floor(i * w.length / n), b = Math.max(a + 1, Math.floor((i + 1) * w.length / n)); let m = 0; for (let j = a; j < b; j++) m = Math.max(m, w[j] || 0); out.push(Math.max(1, Math.round(m / mx * 15))); } return out; }
 window.squashWave = squash;
 
@@ -303,26 +308,43 @@ function playMime(f, p) {
   return vid ? 'video/webm' : 'audio/webm';
 }
 window.playMime = playMime;
+const mediaSrcCache = {};
+/** blob:-ссылки одного расшифрованного видео с разными типами: первый — по сигнатуре, дальше запасные */
+function mediaSrcs(f) {
+  if (f.local) return Promise.resolve([f.local]);
+  return mediaSrcCache[f.p] = mediaSrcCache[f.p] || fetchFilePlain(f).then(p => {
+    const first = playMime(f, p), alt = ['video/mp4', 'video/webm', 'video/x-matroska', ''];
+    return [first, ...alt.filter(x => x !== first)].map(t => URL.createObjectURL(t ? new Blob([p], { type: t }) : new Blob([p])));
+  }).catch(e => { delete mediaSrcCache[f.p]; throw e; });
+}
+window.mediaSrcs = mediaSrcs;
 function mediaUrl(f) { if (f.local) return Promise.resolve(f.local); /* своё неотправленное — из записанного Blob */ return mediaUrls[f.p] = mediaUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: playMime(f, p) }))).catch(e => { delete mediaUrls[f.p]; throw e; }); }
 const heardKey = id => 'msgr-heard:' + id;
 const isHeard = id => { try { return !!localStorage.getItem(heardKey(id)); } catch { return false; } };
 let playing = null;
 window.mediaEl = (f, m, fromOther) => {
   if (f.vk === 'round') {
-    // 200px круг; пока нет первого кадра — серый круг с ▶ (никогда не чёрный); при ошибке — то же с подписью
+    // круг ровно 200px; пока нет первого кадра — серый круг с ▶ (не чёрный); подпись состояния — ПОД кругом, серая, в одну строку
+    const wrap = document.createElement('div'); wrap.className = 'round-wrap';
     const box = document.createElement('div'); box.className = 'round-v wait'; box.setAttribute('role', 'button'); box.setAttribute('aria-label', 'Видеосообщение ' + fmtDur(f.d) + ', нажмите для звука');
     const v = document.createElement('video'); v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto'; v.setAttribute('playsinline', ''); v.disablePictureInPicture = true;
     const ph = document.createElement('span'); ph.className = 'round-ph ms'; ph.setAttribute('aria-hidden', 'true'); txt(ph, 'play_arrow');
     const t = document.createElement('span'); t.className = 'round-dur'; txt(t, fmtDur(f.d));
-    box.append(v, ph, t);
-    v.addEventListener('loadeddata', () => box.classList.remove('wait'));
-    v.addEventListener('error', () => { box.classList.add('wait'); txt(t, 'не воспроизводится'); });
-    let started = false;
-    const start = () => { if (started) return; started = true; mediaUrl(f).then(u => { v.src = u; v.load(); v.play().catch(() => { try { v.currentTime = 0.001; } catch { /* первый кадр как превью */ } }); }).catch(() => { started = false; txt(t, 'не загрузилось'); }); };
+    const cap = document.createElement('div'); cap.className = 'round-cap'; cap.hidden = true;
+    box.append(v, ph, t); wrap.append(box, cap);
+    const bad = msg => { box.classList.add('wait', 'broken'); txt(ph, 'videocam_off'); cap.hidden = false; txt(cap, msg); };
+    v.addEventListener('loadeddata', () => { box.classList.remove('wait'); cap.hidden = true; });
+    let srcs = null, si = 0, started = false;
+    // источники: тип по сигнатуре, затем запасные (mp4 / webm / matroska / без типа) — один и тот же расшифрованный Blob
+    v.addEventListener('error', () => { if (srcs && ++si < srcs.length) { v.src = srcs[si]; v.load(); v.play().catch(() => {}); } else bad('Видео повреждено'); });
+    const start = () => { if (started) return; started = true; mediaSrcs(f).then(list => { srcs = list; si = 0; v.src = list[0]; v.load(); v.play().catch(() => { try { v.currentTime = 0.001; } catch { /* первый кадр */ } }); })
+      .catch(e => { started = false; bad(e && e.corrupt ? 'Видео повреждено' : 'Не загрузилось — нажмите, чтобы повторить'); }); };
     start();
-    box.onclick = ev => { ev.stopPropagation(); if (!v.src) return start(); const big = !box.classList.contains('big'); box.classList.toggle('big', big); v.muted = !big; v.loop = !big; v.currentTime = 0; v.play().catch(e => toast('Не удалось воспроизвести: ' + (e && e.message || e), 3000)); if (big && fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } };
-    v.onended = () => { box.classList.remove('big'); v.muted = true; v.loop = true; v.play().catch(() => {}); };
-    return box;
+    box.onclick = ev => { ev.stopPropagation(); if (box.classList.contains('broken') && !started) { box.classList.remove('broken'); cap.hidden = true; return start(); } if (box.classList.contains('broken') || !v.src) return;
+      const on = !box.classList.contains('playing'); box.classList.toggle('playing', on); v.muted = !on; v.loop = !on; v.currentTime = 0;
+      v.play().catch(() => bad('Видео повреждено')); if (on && fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } };
+    v.onended = () => { box.classList.remove('playing'); v.muted = true; v.loop = true; v.play().catch(() => {}); };
+    return wrap;
   }
   const row = document.createElement('div'); row.className = 'voice' + (!fromOther || isHeard(m.id) ? ' heard' : '');
   const btn = iconBtn('play_arrow', 'Воспроизвести голосовое', 'v-play');

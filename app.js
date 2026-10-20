@@ -546,7 +546,7 @@ async function renderMsg(m, d) {
       b.className = 'body'; txt(b, pl.t); if (!pl.t) b.hidden = true;
       window.cacheMsg?.(m, pl);
       if (!mine) { sendDlv(m); seenIO.observe(d); }
-      if (pl.f && (pl.f.vk === 'voice' || pl.f.vk === 'round') && window.mediaEl) { d.querySelectorAll(':scope > .round-v, :scope > .voice').forEach(x => x.remove()); /* повторная отрисовка (эхо своего, расшифровка) — без второго круга */ d.insertBefore(mediaEl(pl.f, m, !mine), b); d.classList.add(pl.f.vk === 'round' ? 'round-msg' : 'voice-msg'); }
+      if (pl.f && (pl.f.vk === 'voice' || pl.f.vk === 'round') && window.mediaEl) { d.querySelectorAll(':scope > .round-wrap, :scope > .round-v, :scope > .voice').forEach(x => x.remove()); /* повторная отрисовка (эхо своего, расшифровка) — без второго круга */ d.insertBefore(mediaEl(pl.f, m, !mine), b); d.classList.add(pl.f.vk === 'round' ? 'round-msg' : 'voice-msg'); }
       else if (pl.f) {
         const fb = fileRow(pl.f, !mine);
         const pv = imagePreview(pl.f, pl.t, !mine, bad => { pv.replaceWith(bad ? brokenRow(pl.f) : fb); d.classList.remove('has-img', 'img-only'); });

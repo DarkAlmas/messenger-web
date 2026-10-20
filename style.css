@@ -136,7 +136,7 @@ input.short{max-width:120px}
 .msg.flash{background:color-mix(in srgb,var(--accent) 35%,var(--in))}
 .msg.mine.flash{background:color-mix(in srgb,var(--accent) 45%,var(--out))}
 .msg .pinned-ico{font-size:11px}
-.date-sep{align-self:center;margin:10px 0 6px;padding:3px 12px;border-radius:999px;font-size:13px;font-weight:500;background:color-mix(in srgb,var(--panel) 80%,transparent);color:var(--muted);position:sticky;top:6px;z-index:2;box-shadow:0 1px 2px #0002}
+.date-sep{align-self:center;flex:none;margin:10px 0 6px;padding:3px 12px;border-radius:999px;font-size:13px;font-weight:500;background:color-mix(in srgb,var(--panel) 80%,transparent);color:var(--muted);position:static;box-shadow:0 1px 2px #0002}
 .jump{position:absolute;right:16px;bottom:84px;width:46px;height:46px;border-radius:50%;padding:0;background:var(--panel);color:var(--muted);box-shadow:var(--shadow);display:flex;align-items:center;justify-content:center;z-index:5}
 .jump svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 #jumpCount{position:absolute;top:-6px;right:-4px;background:var(--accent);color:var(--accent-text);border-radius:999px;font-size:12px;font-weight:600;min-width:22px;height:22px;padding:0 6px;display:flex;align-items:center;justify-content:center}
@@ -145,7 +145,7 @@ input.short{max-width:120px}
 #ctxMenu button:hover,#ctxMenu button:focus{background:var(--panel2);outline:none}
 #ctxMenu button.danger-item{color:var(--danger)}
 #ctxMenu .sep{height:1px;background:var(--line);margin:4px 6px}
-#toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:70;background:#000c;color:#fff;padding:9px 16px;border-radius:12px;font-size:14px;max-width:90vw}
+#toast{position:fixed;left:8px;right:8px;bottom:90px;z-index:70;box-sizing:border-box;background:#000c;color:#fff;padding:9px 16px;border-radius:12px;font-size:14px;text-align:center}
 #fwdList{list-style:none;margin:6px 0;padding:0;max-height:50vh;overflow:auto}
 #fwdList li{display:flex;align-items:center;gap:10px;padding:8px;border-radius:10px;cursor:pointer}#fwdList li:hover{background:var(--panel2)}
 #chatList li.archive-row .ava{background:#7d8b99!important}
@@ -200,7 +200,7 @@ button.icon{color:var(--color-text-secondary);width:40px;height:40px;min-height:
 .msg:not(.mine) .reply{border-left-color:var(--color-primary)}
 .msg .noe2e{color:var(--color-warning)}.msg.mine .noe2e{color:#FFE08A}
 .msg .file{background:var(--color-hover)}.msg.mine .file{background:#ffffff26}
-.date-sep{background:var(--color-surface-container);color:var(--color-text-secondary)}
+.date-sep{background:color-mix(in srgb,var(--color-surface-container) 85%,transparent);color:var(--color-text-secondary)}
 /* меню */
 #ctxMenu{min-width:200px;padding:var(--space-2) 0;background:var(--color-surface-lowest);border:0;border-radius:var(--radius-menu);box-shadow:var(--shadow-menu);animation:menu-in var(--dur) var(--ease);transform-origin:top left}
 [data-theme="dark"] #ctxMenu{background:var(--color-surface-high)}
@@ -436,11 +436,10 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .v-dur{flex:0 0 auto;width:34px;text-align:right;white-space:nowrap;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .msg.round-msg{background:none!important;box-shadow:none!important;padding:0!important}
 .msg.round-msg .body:empty{display:none}
-.round-v{position:relative;flex:none;width:200px;height:200px;max-width:200px;border-radius:50%;overflow:hidden;cursor:pointer;transition:width .2s,height .2s;background:var(--color-surface-highest,#9e9e9e)}
+.round-v{position:relative;flex:none;width:200px;height:200px;max-width:200px;border-radius:50%;overflow:hidden;cursor:pointer;background:var(--color-surface-highest,#9e9e9e)}
 .round-v.wait video{opacity:0}
 .round-ph{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:56px;height:56px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;font-size:34px;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .round-v:not(.wait) .round-ph{display:none}
-.round-v.big{width:min(300px,80vw);height:min(300px,80vw);max-width:none}
 .round-v video{display:block;width:100%;height:100%;object-fit:cover;border-radius:50%}
 .msg.round-msg{min-width:0!important;max-width:none!important;width:auto}
 .round-dur{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);font-size:12px;color:#fff;background:rgba(0,0,0,.45);padding:1px 6px;border-radius:9px}
@@ -458,3 +457,11 @@ html:not(.ms-ready) .ms,html:not(.ms-ready) .settings-row__icon{color:transparen
 
 /* закреплённая дата не наезжает на системные строки (новое устройство / код безопасности): строка выше и непрозрачна */
 .sys-row{background:var(--color-surface-container,#eee);box-shadow:0 0 0 4px var(--color-chat-bg,var(--bg))}
+
+/* кружок: ровно 200×200 (без процентов и увеличения), подпись состояния под кругом */
+.round-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}
+.msg:not(.mine) .round-wrap{align-items:flex-start}
+.round-v,.round-v.playing{width:200px!important;height:200px!important;min-width:200px;max-width:200px!important;max-height:200px!important;flex:none}
+.round-v video{width:200px;height:200px;max-width:200px}
+.round-cap{font-size:12px;color:var(--muted);white-space:nowrap;line-height:16px}.round-cap[hidden]{display:none}
+.round-v.broken .round-dur{display:none}
