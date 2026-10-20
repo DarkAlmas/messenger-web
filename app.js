@@ -444,7 +444,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261020g').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261020h').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -2079,7 +2079,9 @@ async function restoreBackup(pass, progress) {
 }
 function backupSheet(first) {
   const row = bkRow, nodes = [];
-  if (first) nodes.push(el('p', '', 'Ключи этого устройства не удалось перенести. Старую переписку можно вернуть из резервной копии.'));
+  // ключи были на этом устройстве и не перенеслись (rebind отказал) — прежний текст; совсем новое устройство — мягкий
+  const lost = !!(E2E && E2E.rebindFailed && E2E.rebindFailed());
+  if (first) nodes.push(el('p', '', lost ? 'Ключи этого устройства не удалось перенести. Старую переписку можно вернуть из резервной копии.' : 'Это новое устройство. Старую переписку можно вернуть из резервной копии.'));
   nodes.push(kvRow('Последняя копия', row ? fmtDT(row.updated_at) + ' · ' + fmtSize(row.size_bytes) : 'не создана'));
   nodes.push(el('p', 'hint small', `Копия шифруется на этом устройстве фразой (не паролем от аккаунта, минимум ${BK_MIN} символов). Фразу нельзя восстановить: если забудете её, копию не открыть. Ключи шифрования в копию не входят.`));
   const p1 = passInput('Фраза'), p2 = passInput('Фраза ещё раз (для новой копии)');

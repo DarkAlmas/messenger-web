@@ -1,13 +1,13 @@
 // Баннер «Установить приложение» — только Android. Данные из version.json рядом с сайтом; файла нет (релиз не опубликован) — баннера нет.
 // Ссылка только на релизы GitHub-репозитория; сертификат подписи (certSha256) показываем текстом для сверки.
 (function () {
-  const APK_PREFIX = 'https://github.com/DarkAlmas/messenger-web/releases/download/';
+  const APK_PREFIXES = ['https://github.com/DarkAlmas/messenger-web/releases/download/', 'https://github.com/DarkAlmas/messenger-android/releases/download/'];
   const ua = navigator.userAgent || '';
   if (!/Android/i.test(ua) || /; wv\)/.test(ua)) return;
   const KEY = 'msgr-appbanner-dismissed';
   fetch('version.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(v => {
     if (!v || typeof v !== 'object') return;
-    const url = typeof v.apkUrl === 'string' && v.apkUrl.startsWith(APK_PREFIX) && !/[\s"'<>]/.test(v.apkUrl) ? v.apkUrl : null;
+    const url = typeof v.apkUrl === 'string' && APK_PREFIXES.some(p => v.apkUrl.startsWith(p)) && !/[\s"'<>]/.test(v.apkUrl) ? v.apkUrl : null;
     const ver = typeof v.version === 'string' ? v.version.slice(0, 32) : (typeof v.versionName === 'string' ? v.versionName.slice(0, 32) : '');
     const tag = ver || url || 'x';
     try { if (localStorage.getItem(KEY) === tag) return; } catch (e) { /* */ }

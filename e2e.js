@@ -184,7 +184,10 @@ function ensureReadyFor(sid) {
         };
         try {
           const { data: nd, error: re } = await sb.rpc('rebind_device', await rebindArgs(kv.dev));
-          if (re) { const e = new Error(/rebind denied/i.test(re.message || '') ? 'rebind denied' : 'rebind_device: ' + (re.message || re.code || 'ошибка')); e.raw = re; throw e; }
+          if (re) { // коды Hack Bot (20.10): RB001 denied, RB002 прежний сеанс активен, RB003 у сеанса уже есть устройство; текст — запасной вариант
+            const c = re.code || '', t = re.message || '';
+            const kind = c === 'RB001' ? 'denied' : c === 'RB002' ? 'active' : c === 'RB003' ? 'has' : /rebind denied/i.test(t) ? 'denied' : /active session/i.test(t) ? 'active' : /already has a device/i.test(t) ? 'has' : '';
+            const e = new Error(kind === 'denied' ? 'rebind denied' : kind === 'active' ? 'rebind_device: old device still has an active session' : 'rebind_device: ' + (t || c || 'ошибка')); e.raw = re; throw e; }
           if (!nd) throw new Error('rebind_device вернул пустой id');
           return await adopt(nd);
         } catch (err) {

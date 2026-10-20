@@ -1,7 +1,7 @@
 {
   "versionCode": 526284,
   "versionName": "2.1.526284",
-  "apkUrl": "https://github.com/DarkAlmas/messenger-web/releases/download/v526284/Messenger.apk",
+  "apkUrl": "https://github.com/DarkAlmas/messenger-android/releases/download/v10/messenger-native-v10.apk",
   "sha256": "0d14ee06623d59d0afbae6411b71c11ca8b8be8ecf502c58f8f2495f7324c6b7",
   "certSha256": "480aed54abea19434209e403190c6c103e967a2fbe4e7d53b382489ae5a2ccc3",
   "notes": "Подписи к файлам, просмотр фото на весь экран, обновление внутри приложения."
