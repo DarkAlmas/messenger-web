@@ -3,7 +3,7 @@
 // Своей криптографии здесь нет.
 import initWasm, { Store, distId, compareScannable } from './vendor/sigwasm/sigwasm.js?v=20261014k';
 
-const OTK_BATCH = 100, OTK_LOW = 20, CLAIM_TTL = 10 * 60 * 1000;
+const OTK_BATCH = 100, OTK_LOW = 20, CLAIM_TTL = 10 * 60 * 1000, SEND_FRESH = 60 * 1000;
 let sb, store = null, kv = {}, db, uid = null, ready = null;
 const claimedAt = {};
 let rebindFail = false;
@@ -315,9 +315,9 @@ const needsFresh = d => jlist('refresh').includes(d);
 async function freshDone(d) { const r = jlist('refresh'); const i = r.indexOf(d); if (i >= 0) { r.splice(i, 1); await put('refresh', JSON.stringify(r)); } }
 
 /** Доверенные устройства пользователя с готовой сессией; TOFU как в Android. */
-async function devicesFor(user) {
+async function devicesFor(user, ttl = CLAIM_TTL) {
   const trust = jget('trust:' + user);
-  if (!claimedAt[user] || Date.now() - claimedAt[user] > CLAIM_TTL || Object.keys(trust).some(needsFresh)) {
+  if (!claimedAt[user] || Date.now() - claimedAt[user] > ttl || Object.keys(trust).some(needsFresh)) {
     let rows;
     try { rows = chk(await sb.rpc('claim_prekeys', { p_user: user })) || []; }
     catch (err) {
@@ -364,6 +364,9 @@ async function devicesFor(user) {
   return Object.keys(trust).filter(d => store.hasSession(d));
 }
 
+const sentAt = {};
+/** Собеседник мог сменить устройство (отметка прочтения/доставки, вход): следующая отправка заново запросит его устройства. */
+export const devicesStale = user => { if (Date.now() - (claimedAt[user] || 0) > SEND_FRESH) { delete claimedAt[user]; delete sentAt[user]; } }; // не чаще раза в минуту (лимит claim_prekeys)
 export const hasPendingChange = () => false; // смена ключа не блокирует: системная строка в чате (keyEvents)
 /** Событие «код безопасности изменился» — только локально (IndexedDB этого браузера), на сервер не уходит и с сервера не принимается. */
 async function sysEvent(k) { const ev = jlist(k); ev.push(new Date().toISOString()); await put(k, JSON.stringify(ev.slice(-50))); }
@@ -395,7 +398,12 @@ export function peerHasKeys(peer) {
 /** Шифротекст {device: {f,t,b}} для устройств собеседника и своих других устройств; null — у собеседника нет ключей. */
 export function encryptDM(peer, pt) {
   return locked(async () => {
-    const peerDevs = await devicesFor(peer);
+    // 20.10 (Support Bot): список устройств собеседника из кэша (до 10 мин) мог быть устаревшим — B вошёл на новом устройстве,
+    // а первое сообщение шифровалось только для старого (удалённого) и не доходило. Перед отправкой обновляем список,
+    // если это первое сообщение «серии» (прошлое ушло больше SEND_FRESH назад) или собеседник подал признаки жизни с другого
+    // устройства (devicesStale). Лимит claim_prekeys — 60 в час; при ошибке/лимите используются уже установленные сессии.
+    const first = !(Date.now() - (sentAt[peer] || 0) < SEND_FRESH);
+    const peerDevs = await devicesFor(peer, first ? 0 : CLAIM_TTL); sentAt[peer] = Date.now();
     if (!peerDevs.length) return null;
     const all = [...peerDevs];
     try { for (const d of await devicesFor(uid)) if (!all.includes(d)) all.push(d); } catch (e) { if (e.userId === uid) throw e; }

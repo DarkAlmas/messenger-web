@@ -425,7 +425,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261020e').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261020f').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -989,7 +989,7 @@ function subChat(c, retried = false) {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => onIncoming(p.new))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => updMsg(p.new))
     // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { onReadBc({ u: p.new.user_id, at: p.new.last_read_at }); if (p.new.last_delivered_at) onDlvBc({ u: p.new.user_id, at: p.new.last_delivered_at }); } })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { E2E && E2E.devicesStale && E2E.devicesStale(p.new.user_id); onReadBc({ u: p.new.user_id, at: p.new.last_read_at }); if (p.new.last_delivered_at) onDlvBc({ u: p.new.user_id, at: p.new.last_delivered_at }); } })
     // DELETE в Realtime не фильтруется по колонкам — приходит только id, сверяем с загруженными
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, p => { if (p.old && p.old.id && msgEls[p.old.id]) { removeMsgEl(p.old.id); loadChatsSoon(); } })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
