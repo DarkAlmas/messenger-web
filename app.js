@@ -235,7 +235,9 @@ function renderChats() {
     const meta = document.createElement('div'); meta.className = 'meta';
     const nm = document.createElement('div'); nm.className = 'name'; txt(nm, c.kind === 'direct' ? (c.name || 'Личный чат') : (c.name || 'Группа'));
     const sub = document.createElement('div'); sub.className = 'sub';
-    txt(sub, c.last_sender ? (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? '📎 Файл' : '🔒 зашифрованное сообщение') : 'Нет сообщений');
+    const pkey = c.id + '|' + c.last_at;
+    if (c.last_sender && !lastPrev[pkey]) { sub.classList.add('sub-skel'); txt(sub, ' '); } // скелетон, пока расшифровываем / берём из кэша
+    else txt(sub, c.last_sender ? '' : 'Нет сообщений');
     sub.dataset.key = c.id + '|' + c.last_at; if (c.last_sender) filePreviewSoon(c, sub);
     meta.append(nm, sub); li.append(ava, meta);
     const side = document.createElement('div'); side.className = 'side-col';
@@ -691,7 +693,9 @@ async function deleteMsg(id) {
   if (!confirm('Удалить сообщение у всех участников чата? Отменить будет нельзя.')) return;
   const { error } = await sb.from('messages').delete().eq('id', id);
   if (error) throw error;
-  if (x.pl && x.pl.f && x.pl.f.p) await sb.storage.from('chat-files').remove([x.pl.f.p]).catch(() => {});
+  // вложение удаляем и у нерасшифрованного сообщения — по attachment_path строки
+  const f = x.pl && x.pl.f, ap = (f && f.p) || x.m.attachment_path;
+  if (ap) await sb.storage.from(f && /^[a-z0-9-]{3,63}$/.test(f.b || '') ? f.b : 'chat-files').remove([ap]).catch(() => {});
   removeMsgEl(id); toast('Сообщение удалено'); loadChatsSoon();
 }
 function removeMsgEl(id) {
@@ -1122,13 +1126,22 @@ async function outRun(job) {
     job.tries = (job.tries || 0) + 1;
     const extra = { ...job.extra, id: job.id };
     const row = had || await sendDeadline(job.kind === 'text' ? sendPayload(job.chat, JSON.stringify({ v: 1, t: job.text }), extra) : sendFile(job.chat, job.file, extra, job.caption, undefined, job), job);
-    delete outbox[job.id];
+    delete outbox[job.id]; job.waitNet = false;
     const el = msgEls[job.id];
     if (el) { delete el.dataset.state; if (row && row.created_at) el.dataset.at = row.created_at; paintTicks(el); } // время сервера, не часы клиента
     return true;
   } catch (err) {
     console.warn('send failed', job.id, err);
-    const el = msgEls[job.id]; if (el && el.dataset.state) { el.dataset.state = 'failed'; paintTicks(el); }
+    const el = msgEls[job.id];
+    // нет сети — не «ошибка», а ожидание: часы остаются, отправим при появлении связи (media.js flushOutbox)
+    const netish = isNetErr(err) || /Нет связи с сервером|нет ответа сервера|failed to fetch/i.test((err && (err.userMsg || err.message)) || '');
+    if (!navigator.onLine || (window.connState && window.connState() === 'offline')) { job.waitNet = true; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); } return false; }
+    if (job.auto > 0 && netish) { // автоповтор после возврата сети: связь ещё поднимается — ждём, не краснеем
+      job.auto--; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); }
+      setTimeout(() => { if (outbox[job.id]) outRun(job); }, 3000); return false;
+    }
+    job.waitNet = false;
+    if (el && el.dataset.state) { el.dataset.state = 'failed'; paintTicks(el); }
     if (!job.toasted && !(err && err.quiet)) { job.toasted = true; toast(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err), 6000); } // тост один раз на сообщение
     return false;
   }
@@ -1255,8 +1268,8 @@ $('fileInput').onchange = async () => {
 async function sendFile(chat, file, extra, caption, fw, job) {
   if (job && job.uploaded) { // файл уже в Storage (прошлая попытка не знала, записалась ли строка) — не загружаем заново
     const u = job.uploaded;
-    try { const r = await sendPayload(chat, u.pt, extra); delete job.uploaded; return r; }
-    catch (e) { if (e && e.absent) { delete job.uploaded; await sb.storage.from('chat-files').remove([u.path]).catch(() => {}); } throw e; }
+    try { const r = await sendPayload(chat, u.pt, { ...(extra || {}), attachment_path: u.path }); delete job.uploaded; return r; }
+    catch (e) { if (e && e.absent) { delete job.uploaded; await sb.storage.from(u.bucket || 'chat-files').remove([u.path]).catch(() => {}); } throw e; }
   }
   if (!(await e2eStart())) throw userErr('Файл не отправлен: шифрование на этом устройстве не запустилось.');
   const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
@@ -1270,17 +1283,18 @@ async function sendFile(chat, file, extra, caption, fw, job) {
   if (bucket !== 'chat-files') f.b = bucket;
   if (job && job.media) Object.assign(f, job.media); // vk: voice|round, d: длительность, w: волна — внутри шифротекста
   // подпись — только внутри зашифрованного payload (поле caption), на сервер открытым текстом не уходит
+  extra = { ...(extra || {}), attachment_path: path }; // только путь: имя, размер и тип — внутри шифротекста
   const pl = { v: 1, t: '', f }; if (caption) pl.caption = String(caption).slice(0, 4000); if (fw) pl.fw = fw;
   if (job) {
     try { return await sendPayload(chat, JSON.stringify(pl), extra); }
     catch (e) { // объект удаляем, только если проверка подтвердила, что строки нет; иначе оставляем и повтор использует тот же путь
-      if (e && e.absent) await sb.storage.from('chat-files').remove([path]).catch(() => {});
-      else job.uploaded = { path, pt: JSON.stringify(pl) };
+      if (e && e.absent) await sb.storage.from(bucket).remove([path]).catch(() => {});
+      else job.uploaded = { path, bucket, pt: JSON.stringify(pl) };
       throw e;
     }
   }
   try { return await sendPayload(chat, JSON.stringify(pl), extra); }
-  catch (e) { await sb.storage.from('chat-files').remove([path]).catch(() => {}); throw e; }
+  catch (e) { await sb.storage.from(bucket).remove([path]).catch(() => {}); throw e; }
 }
 /** Загрузка шифротекста в Storage: Bearer-токен, без cookies (credentials: 'omit' — иначе CORS с '*' падает), без автоповторов.
  *  Объект уже есть (повтор после потерянного ответа) — считаем загруженным. */
@@ -1397,25 +1411,26 @@ function prevOf(pl) {
 }
 /** Сообщение расшифровано в открытом чате (в т.ч. своё отправленное) — обновляем превью в списке, если оно последнее. */
 function notePreview(m, pl) {
-  const key = m.chat_id + '|' + m.created_at; lastPrev[key] = prevOf(pl);
-  const sub = document.querySelector('#chatList li[data-id="' + CSS.escape(m.chat_id) + '"] .sub');
+  const key = m.chat_id + '|' + m.created_at; lastPrev[key] = prevOf(pl); window.cachePrev?.();
+  const sub = document.querySelector('#chatList li[data-id="' + CSS.escape(m.chat_id) + '"] .sub'); if (sub) sub.classList.remove('sub-skel');
   const curAt = sub && sub.dataset.key ? sub.dataset.key.split('|')[1] : '';
   if (sub && (sub.dataset.key === key || !curAt || new Date(m.created_at) >= new Date(curAt))) {
     sub.dataset.key = key; const li = sub.closest('li'); const tm = li && li.querySelector('.time'); if (tm) txt(tm, fmtListTime(m.created_at)); const v = lastPrev[key]; sub.textContent = ''; if (me && m.sender_id === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); }
 }
 async function filePreviewSoon(c, sub) {
   if (!me) return; const key = c.id + '|' + c.last_at;
-  const paint = v => { if (!v || !sub.isConnected || !me) return; sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
+  const stub = () => { if (!sub.isConnected || !me || !sub.classList.contains('sub-skel')) return; sub.classList.remove('sub-skel'); txt(sub, (c.last_sender === me.id ? 'Вы: ' : '') + (c.last_has_file ? '📎 Файл' : '🔒 зашифрованное сообщение')); };
+  const paint = v => { if (!v || !sub.isConnected || !me) return; sub.classList.remove('sub-skel'); sub.textContent = ''; if (c.last_sender === me.id) sub.append('Вы: '); if (v.icon) sub.prepend(msIcon(v.icon, 'sub-ic')); sub.append(v.text); };
   // Из кэша — после текущего прохода loadChats: li ещё не в DOM (sub.isConnected=false), синхронная отрисовка молча пропускалась
   if (lastPrev[key]) { const v = lastPrev[key]; queueMicrotask(() => paint(v)); return; }
   try {
     const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
-    if (!data || !data.ciphertext) return;
-    const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other) return;
+    if (!data || !data.ciphertext) return stub();
+    const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other) return stub();
     if (!pl.pending) sendDlv(data);
     if (pl.pending) { setTimeout(() => { if (sub.isConnected && me) filePreviewSoon(c, sub); }, 16000); return; } // шифрование занято — повторим
-    paint(lastPrev[key] = prevOf(pl));
-  } catch (e) { /* остаётся «Файл» */ }
+    paint(lastPrev[key] = prevOf(pl)); window.cachePrev?.();
+  } catch (e) { stub(); }
 }
 function iconBtn(name, label, cls) { const b = document.createElement('button'); b.type = 'button'; b.className = 'icon ' + (cls || ''); b.setAttribute('aria-label', label); b.title = label; b.append(msIcon(name)); return b; }
 function openImage(url, alt, f, caption, fromOther) {
@@ -2025,8 +2040,10 @@ function backupSheet(first) {
 }
 $('rowBackup').onclick = async () => { try { await getBackupRow(); } catch (e) { return toast('Не удалось загрузить: ' + ruErr(e), 3000); } backupSheet(false); };
 // «Восстановить переписку?» — один раз после регистрации новых ключей, если на сервере есть копия; отказ помним для uid+устройства
+let restoreOffered = null; // uid, для которого уже предлагали в этой сессии страницы
 async function offerRestore() {
-  const k = 'msgr-restore-offered:' + me.id + ':' + (E2E.deviceId() || '');
-  try { if (localStorage.getItem(k)) return; } catch (e) { /* */ }
+  if (!me || restoreOffered === me.id) return; restoreOffered = me.id;
+  const k = 'msgr-restore-offered:' + me.id; // «Позже» / показ — больше не предлагаем этому аккаунту в этом браузере
+  try { if (localStorage.getItem(k) || sessionStorage.getItem(k)) return; sessionStorage.setItem(k, '1'); } catch (e) { /* */ }
   try { if (await getBackupRow()) { try { localStorage.setItem(k, '1'); } catch (e) { /* */ } backupSheet(true); } } catch (e) { console.warn('key_backups', e); }
 }

@@ -1,6 +1,9 @@
 /* Офлайн-кэш (IndexedDB), состояние соединения, догрузка после reconnect, уведомления (service worker),
    клиентская push-подписка, запись голосовых и видеокружков. Подключается после app.js (общие глобальные имена). */
 (() => {
+// ---------- значки: пока шрифт не загружен, текст лигатур («done», «mic») не показываем ----------
+if (document.fonts && document.fonts.load) Promise.race([document.fonts.load("24px 'Material Symbols Rounded'", 'mic'), new Promise(r => setTimeout(r, 4000))]).finally(() => document.documentElement.classList.add('ms-ready'));
+else document.documentElement.classList.add('ms-ready');
 // ---------- IndexedDB: msgr-cache / kv ----------
 const DB = 'msgr-cache'; let dbp = null;
 function db() { if (!dbp) dbp = new Promise((res, rej) => { const r = indexedDB.open(DB, 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); return dbp; }
@@ -8,7 +11,12 @@ async function kvGet(k) { try { const d = await db(); return await new Promise((
 async function kvSet(k, v) { try { const d = await db(); await new Promise((res, rej) => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch (e) { console.warn('cache', e); } }
 const uidKey = k => me ? me.id + ':' + k : null;
 window.cacheChats = list => { const k = uidKey('chats'); if (k) kvSet(k, list.map(c => ({ ...c }))); };
+let prevT = null;
+window.cachePrev = () => { clearTimeout(prevT); prevT = setTimeout(() => { const k = uidKey('prev'); if (!k) return; const ids = new Set(lastChats.map(c => c.id + '|' + c.last_at)); const o = {}; for (const [kk, v] of Object.entries(lastPrev)) if (ids.has(kk) || !lastChats.length) o[kk] = v; kvSet(k, o); }, 400); };
+let prevLoaded = null;
+async function loadPrev() { const k = uidKey('prev'); if (!k || prevLoaded === k) return; prevLoaded = k; const o = await kvGet(k); if (o && typeof o === 'object') for (const [kk, v] of Object.entries(o)) if (!lastPrev[kk] && v && typeof v.text === 'string') lastPrev[kk] = { icon: typeof v.icon === 'string' ? v.icon : null, text: v.text }; }
 window.chatsFromCache = async () => {
+  await loadPrev();
   if (lastChats.length) return true;
   const k = uidKey('chats'); if (!k) return false;
   const list = await kvGet(k); if (!Array.isArray(list) || !list.length || lastChats.length || !me) return false;
@@ -21,17 +29,20 @@ window.cacheMsg = (m, pl) => {
   (pending[m.chat_id] = pending[m.chat_id] || {})[m.id] = { m, pt: ptOf(pl) };
   clearTimeout(cacheT); cacheT = setTimeout(flushCache, 500);
 };
-async function flushCache() {
+let flushing = Promise.resolve();
+function flushCache() { flushing = flushing.then(flushCacheNow, flushCacheNow); return flushing; } // по очереди: параллельные записи затирали друг друга
+async function flushCacheNow() {
   const who = me && me.id; if (!who) return;
   for (const [chat, add] of Object.entries(pending)) {
     delete pending[chat];
     const k = who + ':msgs:' + chat, cur = (await kvGet(k)) || {};
     Object.assign(cur, add);
     const ids = Object.keys(cur).sort((a, b) => String(cur[a].m.created_at).localeCompare(String(cur[b].m.created_at)));
-    for (const id of ids.slice(0, Math.max(0, ids.length - KEEP))) delete cur[id];
+    for (const id of ids.slice(0, Math.max(0, ids.length - KEEP))) delete cur[id]; // остаются 100 самых новых по created_at
     if (me && me.id === who) await kvSet(k, cur);
   }
 }
+window.__flushCache = () => flushCache();
 window.cachedMsgs = async chatId => {
   const k = uidKey('msgs:' + chatId); if (!k) return [];
   const cur = (await kvGet(k)) || {};
@@ -40,6 +51,7 @@ window.cachedMsgs = async chatId => {
   return out.map(x => x.m);
 };
 window.clearLocalCache = () => {
+  prevLoaded = null; for (const k of Object.keys(lastPrev)) delete lastPrev[k];
   for (const k of Object.keys(pending)) delete pending[k];
   const go = () => { try { indexedDB.deleteDatabase(DB); } catch { /* */ } };
   if (dbp) dbp.then(d => { d.close(); dbp = null; go(); }, () => { dbp = null; go(); }); else go();
@@ -92,7 +104,7 @@ async function caughtUp() {
   flushOutbox();
 }
 window.caughtUp = caughtUp;
-function flushOutbox() { for (const job of Object.values(outbox)) { const d = msgEls[job.id]; if (!d || d.dataset.state === 'failed') outRun(job); } }
+function flushOutbox() { for (const job of Object.values(outbox)) { const d = msgEls[job.id]; if (job.waitNet || !d || d.dataset.state === 'failed') { job.waitNet = false; job.auto = 3; outRun(job); } } }
 addEventListener('online', () => { tickConn(); setTimeout(flushOutbox, 1500); });
 addEventListener('offline', tickConn);
 setInterval(tickConn, 1000);

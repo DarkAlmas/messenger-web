@@ -1,6 +1,6 @@
 /* Service worker: офлайн-оболочка сайта (network-first), уведомления, Web Push. */
 const CACHE = 'msgr-shell-v1';
-self.addEventListener('install', e => { self.skipWaiting(); });
+self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(['fonts/material-symbols-rounded.woff2?v=8', 'style.css'])).catch(() => {})); });
 self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
 self.addEventListener('fetch', e => {
   const r = e.request; if (r.method !== 'GET') return;
