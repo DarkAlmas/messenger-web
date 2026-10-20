@@ -15,8 +15,20 @@ let prevT = null;
 window.cachePrev = () => { clearTimeout(prevT); prevT = setTimeout(() => { const k = uidKey('prev'); if (!k) return; const ids = new Set(lastChats.map(c => c.id + '|' + c.last_at)); const o = {}; for (const [kk, v] of Object.entries(lastPrev)) if (ids.has(kk) || !lastChats.length) o[kk] = v; kvSet(k, o); }, 400); };
 let prevLoaded = null;
 async function loadPrev() { const k = uidKey('prev'); if (!k || prevLoaded === k) return; prevLoaded = k; const o = await kvGet(k); if (o && typeof o === 'object') for (const [kk, v] of Object.entries(o)) if (!lastPrev[kk] && v && typeof v.text === 'string') lastPrev[kk] = { icon: typeof v.icon === 'string' ? v.icon : null, text: v.text }; }
+// ---------- очередь неотправленных в IndexedDB (переживает перезагрузку) ----------
+let obT = null;
+window.saveOutbox = () => { clearTimeout(obT); obT = setTimeout(() => { const k = uidKey('outbox'); if (!k) return; const o = {};
+  for (const j of Object.values(outbox)) o[j.id] = { w: !(j.hold || (msgEls[j.id] && msgEls[j.id].dataset.state === 'failed')), id: j.id, at: j.at, kind: j.kind, text: j.text, file: j.file, caption: j.caption, media: j.media, extra: j.extra, uploaded: j.uploaded, chat: { id: j.chat.id, kind: j.chat.kind, peer: j.chat.peer || null, name: j.chat.name || null } };
+  kvSet(k, o); }, 150); };
+let obLoaded = null;
+async function loadOutbox() {
+  const k = uidKey('outbox'); if (!k || obLoaded === k) return; obLoaded = k;
+  const o = await kvGet(k); if (!o || typeof o !== 'object') return;
+  for (const j of Object.values(o)) if (j && j.id && !outbox[j.id] && j.chat && j.chat.id) { if (j.w === false) j.hold = true; else j.waitNet = true; j.tries = 1; outbox[j.id] = j; } // tries=1: перед повтором проверим, не дошло ли уже
+  paintNetLine(); if (navigator.onLine && Object.values(outbox).some(j => j.waitNet)) setTimeout(flushOutbox, 2000);
+}
 window.chatsFromCache = async () => {
-  await loadPrev();
+  await loadPrev(); await loadOutbox();
   if (lastChats.length) return true;
   const k = uidKey('chats'); if (!k) return false;
   const list = await kvGet(k); if (!Array.isArray(list) || !list.length || lastChats.length || !me) return false;
@@ -51,7 +63,7 @@ window.cachedMsgs = async chatId => {
   return out.map(x => x.m);
 };
 window.clearLocalCache = () => {
-  prevLoaded = null; for (const k of Object.keys(lastPrev)) delete lastPrev[k];
+  obLoaded = null; prevLoaded = null; for (const k of Object.keys(lastPrev)) delete lastPrev[k];
   for (const k of Object.keys(pending)) delete pending[k];
   const go = () => { try { indexedDB.deleteDatabase(DB); } catch { /* */ } };
   if (dbp) dbp.then(d => { d.close(); dbp = null; go(); }, () => { dbp = null; go(); }); else go();
@@ -60,11 +72,16 @@ window.clearLocalCache = () => {
 window.showSkeletons = () => { const box = $('messages'); for (let i = 0; i < 4; i++) { const s = document.createElement('div'); s.className = 'msg skel skel-ph' + (i % 2 ? ' mine' : ''); s.style.width = (40 + (i * 17) % 35) + '%'; box.append(s); } };
 window.hideSkeletons = () => document.querySelectorAll('#messages .skel-ph').forEach(x => x.remove());
 
+// «Отправится, когда появится сеть» — серая строка над полем ввода
+function paintNetLine() { const el = $('netLine'); if (!el) return; el.hidden = !(currentChat && Object.values(outbox).some(j => j.waitNet && j.chat && j.chat.id === currentChat.id)); }
+window.paintNetLine = paintNetLine;
 // ---------- состояние соединения: «Чаты (Соединение…)» / «Чаты (Ожидание сети…)» ----------
-let conn = null, wasDown = true;
+let conn = null, wasDown = true, netFailAt = 0, netOkAt = 0;
+{ const f = window.fetch; window.fetch = function (u, o) { const s = String(u && u.url || u); const p = f.apply(this, arguments); if (s.startsWith(C.SUPABASE_URL)) p.then(() => { netOkAt = Date.now(); }, e => { if (!(e && e.name === 'AbortError')) netFailAt = Date.now(); }); return p; }; }
 window.connState = () => conn === 'ok' || !conn ? '' : conn;
 function computeConn() {
   if (!navigator.onLine) return 'offline';
+  if (netFailAt > netOkAt && Date.now() - netFailAt < 20000) return 'offline'; // запросы к серверу не проходят (сеть «есть» только формально)
   try { if (!sb.realtime.isConnected()) return 'connecting'; } catch { return 'connecting'; }
   if (inboxChan && inboxChan.state && inboxChan.state !== 'joined') return 'connecting';
   return 'ok';
@@ -80,6 +97,7 @@ function tickConn() {
   if (n !== conn) { conn = n; paintConn(); if (currentChat) paintSub(); }
   if (conn === 'ok' && wasDown) { wasDown = false; caughtUp(); }
   if (conn !== 'ok') { wasDown = true; revive(); }
+  paintNetLine();
 }
 let reviveAt = 0;
 function revive() { // канал упал окончательно (chan = null после ошибки) — пересоздаём, не чаще раза в 10 с
@@ -89,6 +107,8 @@ function revive() { // канал упал окончательно (chan = null
 }
 /** После переподключения: список чатов, пропущенные сообщения открытого чата, очередь неотправленных */
 async function caughtUp() {
+  try { if (E2E && E2E.syncPending && E2E.syncPending()) await E2E.syncDeferred(); } catch (e) { console.warn('e2e sync', e); if (e && e.name === 'IdentityMismatch') showIdMismatch(e); }
+  if (e2eErr && e2eErr.name !== 'IdentityMismatch' && e2eErr.name !== 'KeysLost') { e2eErr = null; e2eStart(); } // шифрование ждало сеть
   loadChatsSoon();
   const c = currentChat;
   if (c) {
@@ -104,7 +124,7 @@ async function caughtUp() {
   flushOutbox();
 }
 window.caughtUp = caughtUp;
-function flushOutbox() { for (const job of Object.values(outbox)) { const d = msgEls[job.id]; if (job.waitNet || !d || d.dataset.state === 'failed') { job.waitNet = false; job.auto = 3; outRun(job); } } }
+function flushOutbox() { for (const job of Object.values(outbox)) { const d = msgEls[job.id]; if (!job.hold && (job.waitNet || !d || d.dataset.state === 'failed')) { job.waitNet = false; job.auto = 3; outRun(job); } } }
 addEventListener('online', () => { tickConn(); setTimeout(flushOutbox, 1500); });
 addEventListener('offline', tickConn);
 setInterval(tickConn, 1000);
@@ -112,7 +132,13 @@ setInterval(tickConn, 1000);
 // ---------- уведомления: service worker, actions «Ответить» / «Прочитано» ----------
 let swReg = null;
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js', { scope: './' }).then(r => { swReg = r; }).catch(e => console.warn('sw', e));
+  const hadCtl = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' }).then(r => { swReg = r; r.update().catch(() => {}); }).catch(e => console.warn('sw', e));
+  // новая версия SW взяла управление — один раз перезагружаем, чтобы открылась новая сборка (не в момент записи)
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadCtl) return; let k = 'msgr-sw-reloaded'; try { if (sessionStorage.getItem(k) === BUILD.commit) return; sessionStorage.setItem(k, BUILD.commit); } catch { return; }
+    if (typeof rec !== 'undefined' && rec) return; location.reload();
+  });
   navigator.serviceWorker.addEventListener('message', ev => onSwMsg(ev.data));
 }
 window.showNotif = async (title, body, data) => {

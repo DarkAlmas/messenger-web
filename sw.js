@@ -1,13 +1,15 @@
 /* Service worker: офлайн-оболочка сайта (network-first), уведомления, Web Push. */
-const CACHE = 'msgr-shell-v1';
+const VER = '20261020e'; // меняется с каждой правкой sw.js → браузер ставит новый SW
+const CACHE = 'msgr-shell-' + VER;
 self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(['fonts/material-symbols-rounded.woff2?v=8', 'style.css'])).catch(() => {})); });
-self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
+self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('msgr-shell-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
   const r = e.request; if (r.method !== 'GET') return;
   const u = new URL(r.url);
   const own = u.origin === self.location.origin, cdn = u.host === 'cdn.jsdelivr.net';
   if (!own && !cdn) return; // API Supabase не кэшируем
-  e.respondWith(fetch(r).then(res => { if (res.ok && (res.type === 'basic' || res.type === 'cors')) { const c = res.clone(); caches.open(CACHE).then(x => x.put(r, c)); } return res; })
+  // свои файлы — всегда с сервера с проверкой (no-cache: HTTP-кэш GitHub Pages 10 мин не отдаёт старую сборку), без сети — из кэша
+  e.respondWith((own ? (r.mode === 'navigate' ? fetch(r.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(r, { cache: 'no-cache' })) : fetch(r)).then(res => { if ((res.ok && (res.type === 'basic' || res.type === 'cors')) || (cdn && res.type === 'opaque')) { const c = res.clone(); caches.open(CACHE).then(x => x.put(r, c)); } return res; })
     .catch(() => caches.match(r).then(m => m || caches.match(r, { ignoreSearch: true })).then(m => m || (r.mode === 'navigate' ? caches.match('./', { ignoreSearch: true }) : Response.error()))));
 });
 async function toClient(msg, url) {

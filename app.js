@@ -1,5 +1,5 @@
 const C = window.MSG_CONFIG;
-const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: true, storageKey: 'msgr-auth', autoRefreshToken: false, detectSessionInUrl: false } });
+const sb = supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, { auth: { persistSession: true, storageKey: 'msgr-auth', autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: (...a) => navigator.onLine ? window.fetch(...a) : Promise.reject(new TypeError('Failed to fetch')) } }); // без сети — сразу ошибка, без долгих повторов // fetch через window — media.js видит сбои сети
 const $ = id => document.getElementById(id);
 // Свои записи истории этой страницы: «назад» уходит в history.back() только по ним (иначе уводил на чужую/битую запись → 404)
 let ownNav = 0; function navPush(st, t, u) { ownNav++; history.pushState(st, t, u); }
@@ -202,7 +202,7 @@ async function loadChats() {
     sb.from('chat_members').select('chat_id, pinned, muted_until, archived, role').eq('user_id', me.id)
   ]);
   if (!me || me.id !== who.id) return;
-  if (error || pe) { if (await window.chatsFromCache?.()) return; showErr('Не удалось загрузить чаты: ' + ruErr(error || pe)); return; }
+  if (error || pe) { if (await window.chatsFromCache?.()) return; if (!navigator.onLine) return; showErr('Не удалось загрузить чаты: ' + ruErr(error || pe)); return; }
   const pm = {}; for (const p of prefs || []) pm[p.chat_id] = p;
   lastChats = (data || []).map(c => ({ id: c.chat_id, kind: c.kind, title: c.kind === 'direct' ? null : c.title, name: c.title, peer: c.peer_id, last_at: c.last_at, last_sender: c.last_sender, last_has_file: c.last_has_file, unread: c.unread, ...(pm[c.chat_id] || {}) }));
   lastChats.sort((x, y) => (y.pinned ? 1 : 0) - (x.pinned ? 1 : 0) || new Date(y.last_at) - new Date(x.last_at));
@@ -422,7 +422,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261015zs').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261020d').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -475,7 +475,9 @@ function showIdMismatch(e) {
 async function e2eStart() {
   if (e2eErr && e2eErr.name === 'LockBusy' && Date.now() - e2eBusyAt < 15000) return false;
   try { const m = await e2eMod; await m.ensureReady(); e2eErr = null; }
-  catch (e) { e2eErr = e; if (e && e.name === 'IdentityMismatch') { showIdMismatch(e); return false; } if (e && e.name === 'LockBusy') { e2eBusyAt = Date.now(); retryBusySoon(); } console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
+  catch (e) { e2eErr = e; if (e && e.name === 'IdentityMismatch') { showIdMismatch(e); return false; }
+    // нет сети (страница открыта офлайн, ключи ещё не прочитаны с сервера) — не ошибка: без баннера, повторим при связи
+    if (e && e.name !== 'KeysLost' && (!navigator.onLine || isNetErr(e) || /нет соединения|failed to fetch|load failed/i.test(e.message || ''))) { console.warn('E2E: ждём сеть', e && e.message); return false; } if (e && e.name === 'LockBusy') { e2eBusyAt = Date.now(); retryBusySoon(); } console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
   return E2E && !e2eErr;
 }
 const sentOwn = {}; // подпись шифротекста → открытый текст (своё сообщение приходит по Realtime раньше, чем сохранится копия)
@@ -829,7 +831,7 @@ function paintSub() {
   if (!currentChat) return txt(s, '');
   if (Date.now() < typingUntil) { s.className = 'typing'; txt(s, (currentChat.kind === 'direct' ? '' : (typingWho ? typingWho + ' ' : '')) + 'печатает'); const d = document.createElement('span'); d.className = 'typing-dots'; d.setAttribute('aria-hidden', 'true'); d.append(document.createElement('i'), document.createElement('i'), document.createElement('i')); s.append(d); s.setAttribute('aria-label', s.textContent + '…'); return; }
   s.removeAttribute('aria-label');
-  if (window.connState && window.connState()) { s.className = 'conn'; return txt(s, 'соединение…'); }
+  if (window.connState && window.connState()) { s.className = 'conn'; return txt(s, window.connState() === 'offline' ? 'ожидание сети…' : 'соединение…'); } // без связи «в сети» не показываем
   if (currentChat.kind !== 'direct') return txt(s, 'группа');
   if (lastSeen === undefined || peerUnknown) return txt(s, '');
   const t = seenText(lastSeen); if (t === 'в сети') s.className = 'online'; txt(s, t);
@@ -919,18 +921,18 @@ async function openChat(c, li) {
   await rtAuth();
   if (currentChat !== c) return;
   subChat(c);
-  if (!c.role) { const { data: r } = await sb.from('chat_members').select('role').eq('chat_id', c.id).eq('user_id', me.id).maybeSingle(); if (r) c.role = r.role; }
+  if (!c.role && navigator.onLine) { const { data: r } = await sb.from('chat_members').select('role').eq('chat_id', c.id).eq('user_id', me.id).maybeSingle(); if (r) c.role = r.role; }
   loadPins(); loadLastSeen(); paintSub();
   $('messages').prepend(olderBtn); olderBtn.hidden = true; oldestAt = null;
   const cached = window.cachedMsgs ? await window.cachedMsgs(c.id) : [];
   if (currentChat !== c) return;
   for (const m of cached) if (!msgEls[m.id]) renderSafe(m, placeMsg(m, d => $('messages').appendChild(d)));
   if (cached.length) $('messages').scrollTop = $('messages').scrollHeight; else window.showSkeletons?.();
-  let { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE);
+  let { data, error } = navigator.onLine ? await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE) : { data: null, error: new Error('Нет соединения с сервером') };
   window.hideSkeletons?.();
-  if (error) { if (cached.length) { data = null; toast('Нет соединения — показаны сохранённые сообщения'); } else showErr('Не удалось загрузить сообщения: ' + ruErr(error)); }
+  if (error) { if (cached.length) { data = null; toast('Нет соединения — показаны сохранённые сообщения'); } else if (navigator.onLine) showErr('Не удалось загрузить сообщения: ' + ruErr(error)); }
   if (currentChat !== c) return;
-  if (error && cached.length) return;
+  if (error && (cached.length || !navigator.onLine)) { for (const j of Object.values(outbox)) if (j.chat && j.chat.id === c.id && !msgEls[j.id]) { try { outBubble(j); } catch (e) { /* */ } } window.paintNetLine?.(); return; }
   // Сначала все пузыри сразу (заглушка «Расшифровка…»), потом расшифровка по порядку: зависшее шифрование не прячет сообщения
   const list = (data || []).reverse(), els = list.map(m => { const o = msgEls[m.id]; if (o) { $('messages').appendChild(o); return o; } return placeMsg(m, d => $('messages').appendChild(d)); });
   $('messages').scrollTop = $('messages').scrollHeight;
@@ -941,6 +943,8 @@ async function openChat(c, li) {
   if (data && data.length) oldestAt = data[0].created_at;
   olderBtn.hidden = !(data && data.length === PAGE);
   if (!(data || []).length) { const p = document.createElement('p'); p.className = 'empty-state'; txt(p, 'Сообщений пока нет. Всё, что вы напишете, будет зашифровано сквозным шифрованием.'); $('messages').append(p); }
+  for (const j of Object.values(outbox)) if (j.chat && j.chat.id === c.id && !msgEls[j.id]) { try { outBubble(j); } catch (e) { console.error('outBubble', e); } } // очередь (в т.ч. после перезагрузки)
+  window.paintNetLine?.();
   await loadReadState();
   loadReacts((data || []).map(m => m.id));
   paintPinBar(); redoSeps();
@@ -1105,7 +1109,7 @@ $('sendForm').onsubmit = async e => {
 const outbox = {}; // id → задание
 function outBubble(job) {
   const d = document.createElement('div'); d.dataset.id = job.id; msgEls[job.id] = d;
-  d.className = 'msg mine'; d.dataset.at = new Date().toISOString(); d.dataset.sender = me.id; d.dataset.state = 'sending';
+  d.className = 'msg mine'; d.dataset.at = job.at || new Date().toISOString(); d.dataset.sender = me.id; d.dataset.state = job.hold ? 'failed' : 'sending';
   if (job.kind === 'file' && /^image\/(jpeg|png|gif|webp)$/.test(job.file.type || '')) {
     // локальное превью исходного файла (из выбранного File, на сервер не уходит)
     const pv = document.createElement('div'); pv.className = 'img-prev'; const im = document.createElement('img'); im.alt = safeName(job.file.name);
@@ -1119,14 +1123,16 @@ function outBubble(job) {
   box.appendChild(d); box.scrollTop = box.scrollHeight; paintTicks(d); return d;
 }
 async function outRun(job) {
+  delete job.hold; // явный повтор пользователем
   const d = msgEls[job.id]; if (d) { d.dataset.state = 'sending'; paintTicks(d); }
+  if (!navigator.onLine) { job.waitNet = true; window.paintNetLine?.(); return false; } // без сети — сразу в очередь, без попытки
   try {
     // повтор: если сообщение уже на сервере — просто отмечаем отправленным, ничего не загружаем заново
     const had = job.tries ? await onServer(job.id).catch(() => null) : null;
     job.tries = (job.tries || 0) + 1;
     const extra = { ...job.extra, id: job.id };
     const row = had || await sendDeadline(job.kind === 'text' ? sendPayload(job.chat, JSON.stringify({ v: 1, t: job.text }), extra) : sendFile(job.chat, job.file, extra, job.caption, undefined, job), job);
-    delete outbox[job.id]; job.waitNet = false;
+    delete outbox[job.id]; job.waitNet = false; window.saveOutbox?.(); window.paintNetLine?.();
     const el = msgEls[job.id];
     if (el) { delete el.dataset.state; if (row && row.created_at) el.dataset.at = row.created_at; paintTicks(el); } // время сервера, не часы клиента
     return true;
@@ -1135,19 +1141,20 @@ async function outRun(job) {
     const el = msgEls[job.id];
     // нет сети — не «ошибка», а ожидание: часы остаются, отправим при появлении связи (media.js flushOutbox)
     const netish = isNetErr(err) || /Нет связи с сервером|нет ответа сервера|failed to fetch/i.test((err && (err.userMsg || err.message)) || '');
-    if (!navigator.onLine || (window.connState && window.connState() === 'offline')) { job.waitNet = true; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); } return false; }
+    if (!navigator.onLine || (window.connState && window.connState() === 'offline')) { job.waitNet = true; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); } window.paintNetLine?.(); return false; }
     if (job.auto > 0 && netish) { // автоповтор после возврата сети: связь ещё поднимается — ждём, не краснеем
       job.auto--; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); }
       setTimeout(() => { if (outbox[job.id]) outRun(job); }, 3000); return false;
     }
     job.waitNet = false;
     if (el && el.dataset.state) { el.dataset.state = 'failed'; paintTicks(el); }
+    window.saveOutbox?.(); // после перезагрузки — красное с «Повторить», без автоотправки
     if (!job.toasted && !(err && err.quiet)) { job.toasted = true; toast(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err), 6000); } // тост один раз на сообщение
     return false;
   }
 }
 function outSend(job) {
-  job.id = crypto.randomUUID(); outbox[job.id] = job;
+  job.id = crypto.randomUUID(); job.at = new Date().toISOString(); outbox[job.id] = job; window.saveOutbox?.();
   try { if (currentChat && currentChat.id === job.chat.id) outBubble(job); } catch (e) { console.error('outBubble', e); }
   return outRun(job);
 }
@@ -1162,8 +1169,8 @@ function outMenu(ev, id) {
   const job = outbox[id]; if (!job) return;
   openMenu(ev, [{ t: 'Повторить', i: 'refresh', f: () => outRun(job) },
     { t: 'Удалить', i: 'delete', danger: true, f: async () => { // только локальное неотправленное
-      if (await onServer(id).catch(() => null)) { toast('Сообщение уже отправлено'); const el = msgEls[id]; if (el) { delete el.dataset.state; paintTicks(el); } delete outbox[id]; return; }
-      delete outbox[id]; const el = msgEls[id]; if (el) { el.remove(); delete msgEls[id]; } } }]);
+      if (await onServer(id).catch(() => null)) { toast('Сообщение уже отправлено'); const el = msgEls[id]; if (el) { delete el.dataset.state; paintTicks(el); } delete outbox[id]; window.saveOutbox?.(); return; }
+      delete outbox[id]; window.saveOutbox?.(); const el = msgEls[id]; if (el) { el.remove(); delete msgEls[id]; } } }]);
 }
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
 const KEY_CHANGED = 'Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nНадёжнее сначала сверить код безопасности (кнопка «🔒 Код безопасности»). Нажмите «ОК», только если уверены, что это действительно собеседник: новый ключ будет принят.';

@@ -91,7 +91,16 @@ const locked = fn => {
 };
 
 function sessionId(jwt) { const p = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return JSON.parse(decodeURIComponent(escape(atob(p)))).session_id; }
-async function token() { const { data } = await sb.auth.getSession(); if (!data.session) throw new Error('нет сессии'); return data.session; }
+async function token() {
+  let s = null; try { const { data } = await sb.auth.getSession(); s = data.session; } catch (e) { /* без сети обновление токена падает */ }
+  if (!s && !navigator.onLine) { try { const o = JSON.parse(localStorage.getItem('msgr-auth') || 'null'); if (o && o.access_token && o.user && o.user.id) s = o; } catch { /* */ } } // офлайн: только id сессии и пользователя из локальной сессии
+  if (!s) throw new Error('нет сессии'); return s;
+}
+const isNetErr = e => !(e && (e.name === 'IdentityMismatch' || e.name === 'KeysLost')) && (!navigator.onLine || /failed to fetch|networkerror|network request failed|load failed|fetch|internet/i.test(String((e && (e.message || e)) || '')));
+let deferredSync = false;
+/** Ключи загружены локально, а серверная часть (проверка строки, prekeys, секрет) отложена до появления сети */
+export const syncPending = () => deferredSync;
+export async function syncDeferred() { if (!deferredSync) return false; deferredSync = false; ready = null; await ensureReady(); return true; }
 const chk = ({ data, error }) => { if (error) throw error; return data; };
 export const deviceId = () => kv.dev || null;
 /** Выход из состояния IdentityMismatch: серверную строку не трогаем (ни перезаписи, ни удаления — это улика возможной подмены),
@@ -121,7 +130,7 @@ export async function ensureReady() {
 }
 function ensureReadyFor(sid) {
   if (!ready) ready = locked(async () => {
-    freshDev = false; rebindFail = false;
+    freshDev = false; rebindFail = false; let localOk = false;
     await initWasm({ module_or_path: new URL('./vendor/sigwasm/sigwasm_bg.wasm?v=20261014k', import.meta.url) });
     if (!db) {
       try { db = await idb(); await syncFromDb(); }
@@ -135,6 +144,7 @@ function ensureReadyFor(sid) {
     // (rpc rebind_device) ДО публикации новых ключей — собеседники не увидят «ключ изменился». Не вышло — обычная регистрация.
     if (kv.dev && kv.dev !== dev && kv.uid === uid && kv.state && kv.dsec && kv.norebind !== '1') {
       const { data: has, error: he } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
+      if (he && isNetErr(he)) throw he; // без сети не переносим и не заводим новые ключи — повторим при связи
       if (!he && !has) {
         const adopt = async nd => {
           const cand = Store.load(kv.state); // проверяем, что состояние читается, до смены id
@@ -188,12 +198,14 @@ function ensureReadyFor(sid) {
       await saveStore(); await put('otk_next', '1'); await put('uid', uid); await put('dev', dev);
     } else {
       try { store = Store.load(kv.state); } catch (err) { console.error(err); throw keysLost('не удалось прочитать сохранённые ключи'); }
+      localOk = true;
+    }
+    try {
       // Строки devices_keys этой сессии нет на сервере (удалена/не дошла) — регистрируем ключи заново, иначе собеседники не могут писать
-      if (kv.uploaded === '1') {
+      if (localOk && kv.uploaded === '1') {
         const { data: row, error } = await sb.from('devices_keys').select('device_id').eq('device_id', dev).maybeSingle();
         if (!error && !row) { console.warn('e2e: нет строки devices_keys для этой сессии — регистрируем ключи'); for (const k of Object.keys(kv)) if (k.startsWith('skd:')) await del(k); await put('uploaded', '0'); }
       }
-    }
     // Разовая миграция: устройство уже переносилось (rebind) старой версией сайта — сессии могли остаться привязанными к прежнему id
     if (kv.refresh_mig !== '1') { if (jlist('olddevs').length && store) await put('refresh', JSON.stringify(sessionDevs(store))); await put('refresh_mig', '1'); }
     await publish(dev);
@@ -202,6 +214,13 @@ function ensureReadyFor(sid) {
     // потеряли rebind_hash на сервере — такие устройства задают секрет заново при ближайшем запуске.
     await ensureSecret(kv.dsec_mig !== '1');
     if (kv.dsec_set === '1' && kv.dsec_rotate !== '1') await put('dsec_mig', '1');
+    } catch (err) {
+      // Нет сети: ключи этого устройства уже прочитаны локально — работаем с ними, серверную часть повторим при появлении связи.
+      // Новое устройство / rebind без сети не делаем (идут выше и бросают ошибку как раньше).
+      if (localOk && isNetErr(err)) { deferredSync = true; console.warn('e2e: нет сети, проверка ключей на сервере отложена'); return dev; }
+      throw err;
+    }
+    deferredSync = false;
     return dev;
   }).catch(e => { ready = null; throw e; });
   return ready;
