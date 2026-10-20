@@ -112,6 +112,43 @@ $('loginForm').onsubmit = async e => {
 };
 ['email','password','username'].forEach(id => $(id).addEventListener('input', () => txt($('authMsg'), '')));
 const NET_ERR = 'Нет соединения с сервером';
+// ---------- восстановление пароля ----------
+// Ссылка из письма: #access_token=…&type=recovery (account.js ставит сессию) или событие PASSWORD_RECOVERY.
+// E2E от пароля не зависит (ключи — в IndexedDB, секрет устройства случайный, резервная копия — по отдельной фразе),
+// поэтому после смены пароля обычный вход: e2eStart / rebind_device как всегда, devices_keys не трогаем.
+let pwRecovery = /(^|[#&?])type=recovery(&|$)/.test(location.hash.slice(1)) || /(^|[?&])type=recovery(&|$)/.test(location.search.slice(1));
+const RESET_REDIRECT = 'https://darkalmas.github.io/messenger-web/';
+$('forgotBtn').onclick = async () => {
+  const email = $('email').value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { txt($('authMsg'), 'Введите почту, на которую зарегистрирован аккаунт, и нажмите «Забыли пароль?» ещё раз'); $('email').focus(); return; }
+  const btn = $('forgotBtn'); btn.disabled = true;
+  try {
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: RESET_REDIRECT });
+    // не сообщаем, есть ли такой аккаунт: одинаковый ответ для любой почты
+    if (error && (isNetErr(error) || !navigator.onLine)) txt($('authMsg'), NET_ERR + '. Попробуйте ещё раз.');
+    else if (error && (error.status === 429 || /rate|too many/i.test(error.message || ''))) txt($('authMsg'), 'Слишком много запросов. Подождите минуту и попробуйте снова.');
+    else txt($('authMsg'), 'Если аккаунт с этой почтой существует, на неё придёт письмо со ссылкой для смены пароля.');
+  } catch (e) { txt($('authMsg'), isNetErr(e) ? NET_ERR + '. Попробуйте ещё раз.' : 'Если аккаунт с этой почтой существует, на неё придёт письмо со ссылкой для смены пароля.'); }
+  finally { btn.disabled = false; }
+};
+function showPwRecovery() {
+  const d = $('pwDlg'); if (d.open) return;
+  $('pwNew1').value = ''; $('pwNew2').value = ''; txt($('pwMsg'), ''); d.showModal(); $('pwNew1').focus();
+}
+$('pwCancel').onclick = () => { pwRecovery = false; $('pwDlg').close(); };
+$('pwForm').onsubmit = async ev => {
+  ev.preventDefault();
+  const a = $('pwNew1').value, b = $('pwNew2').value;
+  if (a.length < 10) return txt($('pwMsg'), 'Пароль должен быть не короче 10 символов');
+  if (a !== b) return txt($('pwMsg'), 'Пароли не совпадают');
+  $('pwSave').disabled = true;
+  try {
+    const { error } = await sb.auth.updateUser({ password: a });
+    if (error) return txt($('pwMsg'), ruErr(error));
+    pwRecovery = false; $('pwDlg').close(); toast('Пароль изменён');
+  } catch (e) { txt($('pwMsg'), ruErr(e)); }
+  finally { $('pwSave').disabled = false; $('pwNew1').value = ''; $('pwNew2').value = ''; }
+};
 function netBack() {
   if ($('authMsg').textContent.startsWith(NET_ERR)) txt($('authMsg'), '');
   clearNetNotice();
@@ -341,24 +378,45 @@ function toast(s, ms = 2500) { const t = $('toast'); txt(t, s);
   t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms); }
 
 // ---------- контекстное меню (правый клик / долгое нажатие) ----------
-function openMenu(e, items) {
-  const m = $('ctxMenu'); m.textContent = '';
+/** Контекстное меню. opts.react — строка реакций (пилюля над меню, спецификация Design Bot 20.10), opts.anchor — пузырь:
+ *  меню привязано к нему (ниже, а если места нет — выше), фон чата затемнён на 40 %, пузырь остаётся ярким. */
+let ctxLift = null;
+function openMenu(e, items, opts = {}) {
+  const m = $('ctxMenu'); m.textContent = ''; m.classList.toggle('rx', !!opts.react);
+  let box = m;
+  if (opts.react) {
+    const pill = document.createElement('div'); pill.className = 'react-pill'; pill.setAttribute('role', 'group'); pill.setAttribute('aria-label', 'Реакции');
+    for (const r of opts.react) {
+      const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); b.className = 'rx-btn' + (r.had ? ' had' : '');
+      b.setAttribute('aria-label', (r.had ? 'Убрать реакцию ' : 'Реакция ') + r.e); b.setAttribute('aria-pressed', String(!!r.had)); b.dataset.emoji = r.e; txt(b, r.e);
+      b.onclick = () => { b.classList.add('pop'); setTimeout(() => { closeMenu(); Promise.resolve().then(r.f).catch(err => toastLong(err.userMsg || ruErr(err))); }, 120); };
+      pill.append(b);
+    }
+    pill.addEventListener('keydown', ev => { if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return; const bs = [...pill.children], i = bs.indexOf(document.activeElement); if (i < 0) return; ev.preventDefault(); bs[(i + (ev.key === 'ArrowRight' ? 1 : bs.length - 1)) % bs.length].focus(); });
+    box = document.createElement('div'); box.className = 'ctx-actions'; m.append(pill, box);
+  }
   for (const it of items) {
-    if (it === '-') { const s = document.createElement('div'); s.className = 'sep'; m.append(s); continue; }
+    if (it === '-') { const s = document.createElement('div'); s.className = 'sep'; s.setAttribute('role', 'separator'); box.append(s); continue; }
     const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); if (it.danger) b.className = 'danger-item';
     const ic = document.createElement('span'); ic.setAttribute('aria-hidden', 'true'); ic.className = 'ms'; txt(ic, it.i || ''); const tx = document.createElement('span'); txt(tx, it.t);
     b.append(ic, tx); b.dataset.act = it.t;
     b.onclick = () => { closeMenu(); Promise.resolve().then(it.f).catch(err => toastLong(err.userMsg || ruErr(err))); };
-    m.append(b);
+    box.append(b);
   }
-  m.hidden = false;
-  const pt = e.touches ? e.touches[0] : e;
-  const x = pt.clientX || 20, y = pt.clientY || 20, r = m.getBoundingClientRect();
-  m.style.left = Math.max(6, Math.min(x, innerWidth - r.width - 6)) + 'px';
-  m.style.top = Math.max(6, Math.min(y, innerHeight - r.height - 6)) + 'px';
+  m.style.left = '0px'; m.style.top = '0px'; m.hidden = false; // меряем без сжатия у края экрана
+  const r = { width: m.offsetWidth, height: m.offsetHeight }, W = innerWidth, H = innerHeight, P = 6;
+  let x, y;
+  if (opts.anchor && opts.anchor.isConnected) {
+    const a = opts.anchor.getBoundingClientRect();
+    x = opts.anchor.classList.contains('mine') ? a.right - r.width : a.left;
+    y = a.bottom + 8 + r.height <= H - P ? a.bottom + 8 : a.top - 8 - r.height >= P ? a.top - 8 - r.height : H - P - r.height;
+    if (ctxLift) ctxLift.classList.remove('ctx-lift'); ctxLift = opts.anchor; ctxLift.classList.add('ctx-lift'); $('messages').classList.add('ctx-dim');
+  } else { const pt = e.touches ? e.touches[0] : e; x = pt.clientX || 20; y = pt.clientY || 20; }
+  m.style.left = Math.max(P, Math.min(x, W - r.width - P)) + 'px';
+  m.style.top = Math.max(P, Math.min(y, H - r.height - P)) + 'px';
   const first = m.querySelector('button'); if (first) first.focus({ preventScroll: true });
 }
-function closeMenu() { $('ctxMenu').hidden = true; }
+function closeMenu() { $('ctxMenu').hidden = true; if (ctxLift) { ctxLift.classList.remove('ctx-lift'); ctxLift = null; } $('messages').classList.remove('ctx-dim'); }
 document.addEventListener('pointerdown', e => { if (!$('ctxMenu').hidden && !$('ctxMenu').contains(e.target)) closeMenu(); }, true);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMenu(); if (!$('composeBar').hidden) cancelCompose(); } });
 window.addEventListener('resize', closeMenu);
@@ -688,21 +746,21 @@ function jumpTo(id) {
 function msgMenuItems(id) {
   const x = msgData[id]; if (!x) return [];
   const m = x.m, mine = m.sender_id === me.id, items = [];
+  // порядок Design Bot 20.10: Ответить, Копировать текст, Изменить, Закрепить, — , Удалить у всех (Переслать — перед разделителем)
   items.push({ t: 'Ответить', i: 'reply', f: () => startReply(id) });
-  for (const e of REACT_EMOJI) { const had = (reacts[id] || []).some(r => r.user_id === me.id && r.emoji === e); items.push({ t: (had ? 'Убрать ' : 'Реакция ') + e, i: e, f: () => toggleReact(id, e) }); }
-  items.push('-');
-  if (x.pl) items.push({ t: 'Переслать', i: 'forward', f: () => openForward(id) });
-  if (canPin()) items.push(pins.includes(id) ? { t: 'Открепить', i: 'push_pin', f: () => pinMsg(id, false) } : { t: 'Закрепить', i: 'push_pin', f: () => pinMsg(id, true) });
-  if (mine && x.pl && !x.pl.f && m.ciphertext) items.push({ t: 'Изменить', i: 'edit', f: () => startEdit(id) });
   if (x.pl && x.pl.t) items.push({ t: 'Копировать текст', i: 'content_copy', f: () => navigator.clipboard.writeText(x.pl.t).then(() => toast('Текст скопирован')) });
+  if (mine && x.pl && !x.pl.f && m.ciphertext) items.push({ t: 'Изменить', i: 'edit', f: () => startEdit(id) });
+  if (canPin()) items.push(pins.includes(id) ? { t: 'Открепить', i: 'push_pin', f: () => pinMsg(id, false) } : { t: 'Закрепить', i: 'push_pin', f: () => pinMsg(id, true) });
+  if (x.pl) items.push({ t: 'Переслать', i: 'forward', f: () => openForward(id) });
   if (mine) items.push('-', { t: 'Удалить у всех', i: 'delete', danger: true, f: () => deleteMsg(id) });
   return items;
 }
+function msgReacts(id) { return REACT_EMOJI.map(e => ({ e, had: (reacts[id] || []).some(r => r.user_id === me.id && r.emoji === e), f: () => toggleReact(id, e) })); }
 function wireMsg(d) {
   const id = () => d.dataset.id;
-  d.addEventListener('contextmenu', e => { e.preventDefault(); openMenu(e, msgMenuItems(id())); });
+  d.addEventListener('contextmenu', e => { e.preventDefault(); openMenu(e, msgMenuItems(id()), { react: msgReacts(id()), anchor: d }); });
   d.addEventListener('dblclick', e => { if (e.target.closest('button')) return; window.getSelection && window.getSelection().removeAllRanges(); startReply(id()); });
-  longPress(d, e => openMenu(e, msgMenuItems(id())));
+  longPress(d, e => openMenu(e, msgMenuItems(id()), { react: msgReacts(id()), anchor: d }));
   // свайп влево — ответить
   let sx = 0, sy = 0, dx = 0, on = false;
   d.addEventListener('touchstart', e => { const p = e.touches[0]; sx = p.clientX; sy = p.clientY; dx = 0; on = true; }, { passive: true });
@@ -1948,6 +2006,7 @@ async function onSession(session) {
   { const pw = $('password'); if (pw) pw.value = ''; }
   if (!me) { window.clearLocalCache?.(); $('app').classList.remove('in-settings', 'in-chat'); currentChat = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); } // пароль не остаётся в поле ни после входа, ни после выхода
   if (me) {
+    if (pwRecovery) setTimeout(showPwRecovery, 0);
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
     { const m = /^#(profile|settings)$/.exec(location.hash); if (m) openSettings(false, m[1]); else setNav('chats'); }
@@ -1994,6 +2053,7 @@ async function rtAuth(token) {
   catch (e) { console.warn('realtime setAuth', e); }
 }
 sb.auth.onAuthStateChange((e, s) => {
+  if (e === 'PASSWORD_RECOVERY') { pwRecovery = true; if (s) setTimeout(showPwRecovery, 0); }
   if (s && (e === 'TOKEN_REFRESHED' || e === 'SIGNED_IN')) rtAuth(s.access_token);
   // SIGNED_OUT не от пользователя: баннер, только если сессии действительно нет после перепроверки
   if (e === 'SIGNED_OUT' && !userSignOut && !sessionGone && me) setTimeout(async () => { try { const { data } = await sb.auth.getSession(); if (!data.session && !userSignOut && !me) endedBanner(null); } catch (x) { /* */ } }, 800);

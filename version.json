@@ -4,5 +4,5 @@
   "apkUrl": "https://github.com/DarkAlmas/messenger-android/releases/download/v11/messenger-native-v11.apk",
   "sha256": "9c79ee46b3c47f96133065ae25a59354823f6e6dde045f653773ab48cd0e8c3f",
   "certSha256": "3935ac6da9c38d006c66955cbbc430af3e9ee019a91c5d4a9c821bb228775017",
-  "notes": "Подписи к файлам, просмотр фото на весь экран, обновление внутри приложения."
+  "notes": "Вход через Google, исправлены лишние устройства"
 }

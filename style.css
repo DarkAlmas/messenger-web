@@ -483,3 +483,19 @@ html:not(.ms-ready) .ms,html:not(.ms-ready) .settings-row__icon{color:transparen
 /* (d) зашифровано для устройств до входа здесь */
 .msg .body.other-dev{font-size:12px;color:var(--muted)}
 .msg.other-dev .ticks{display:none}
+/* 20.10 меню сообщения (Design Bot): пилюля реакций над меню, меню у пузыря, фон чата затемнён на 40 % */
+#ctxMenu.rx{background:none;box-shadow:none;border:0;padding:0;min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:8px}
+[data-theme="dark"] #ctxMenu.rx{background:none}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) #ctxMenu.rx{background:none}}
+#ctxMenu .react-pill{display:flex;gap:4px;height:48px;box-sizing:border-box;padding:4px;border-radius:24px;background:#2A2F3A;box-shadow:var(--shadow-menu);align-items:center;align-self:flex-start}
+#ctxMenu .react-pill button{width:40px;height:40px;min-height:0;padding:0;gap:0;border-radius:50%;font-size:28px;line-height:1;background:none;display:flex;align-items:center;justify-content:center;transition:transform .12s ease}
+#ctxMenu .react-pill button.had{background:rgba(79,195,247,.2)}
+#ctxMenu .react-pill button:hover,#ctxMenu .react-pill button:focus-visible{background:rgba(255,255,255,.08)}
+#ctxMenu .react-pill button.had:hover,#ctxMenu .react-pill button.had:focus-visible{background:rgba(79,195,247,.3)}
+#ctxMenu .react-pill button.pop{transform:scale(1.2)}
+#ctxMenu .ctx-actions{display:flex;flex-direction:column;min-width:200px;padding:var(--space-2) 0;background:var(--color-surface-lowest);border-radius:var(--radius-menu);box-shadow:var(--shadow-menu)}
+[data-theme="dark"] #ctxMenu .ctx-actions{background:var(--color-surface-high)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) #ctxMenu .ctx-actions{background:var(--color-surface-high)}}
+#ctxMenu.rx .ctx-actions button{min-height:44px;padding-top:0;padding-bottom:0;font-size:15px}
+#ctxMenu.rx .ctx-actions .ms{font-size:20px;width:20px}
+#messages .msg.ctx-lift{position:relative;z-index:3;box-shadow:0 0 0 200vmax rgba(0,0,0,.4)}
