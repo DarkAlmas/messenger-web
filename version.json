@@ -1,8 +1,8 @@
 {
-  "versionCode": 526284,
-  "versionName": "2.1.526284",
+  "versionCode": 10,
+  "versionName": "10.0-native",
   "apkUrl": "https://github.com/DarkAlmas/messenger-android/releases/download/v10/messenger-native-v10.apk",
-  "sha256": "0d14ee06623d59d0afbae6411b71c11ca8b8be8ecf502c58f8f2495f7324c6b7",
-  "certSha256": "480aed54abea19434209e403190c6c103e967a2fbe4e7d53b382489ae5a2ccc3",
+  "sha256": "da1e60419aeff4f81f9d4fa24bc1ebf86dc792823902bb385f9bde5db1384097",
+  "certSha256": "3935ac6da9c38d006c66955cbbc430af3e9ee019a91c5d4a9c821bb228775017",
   "notes": "Подписи к файлам, просмотр фото на весь экран, обновление внутри приложения."
 }
