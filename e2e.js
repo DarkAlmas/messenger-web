@@ -131,6 +131,8 @@ export async function resetForRelogin() {
 
 export function init(client) { sb = client; }
 export class KeysLost extends Error {}
+export class RebindBlocked extends Error { constructor() { super('прежний сеанс этого устройства ещё активен на сервере'); this.name = 'RebindBlocked'; this.userMsg = 'Прежний сеанс на этом устройстве ещё не завершён на сервере, поэтому ключи шифрования пока не перенесены. Сообщения не отправляются.'; } }
+const rebindBlocked = () => new RebindBlocked();
 /** На сервере у строки этого устройства другой identity-ключ, чем в браузере: отправка остановлена, нужен повторный вход. */
 export class IdentityMismatch extends KeysLost {
   constructor(dev, localFp, serverFp) { super('ключи этого устройства не совпадают с сервером'); this.name = 'IdentityMismatch'; this.code = 'E2E_IDENTITY_MISMATCH'; this.deviceId = dev || null; this.localFp = localFp || null; this.serverFp = serverFp || null; this.userMsg = 'Ключи этого устройства не совпадают с сервером. Отправка остановлена — войдите заново.'; }
@@ -182,7 +184,7 @@ function ensureReadyFor(sid) {
         };
         try {
           const { data: nd, error: re } = await sb.rpc('rebind_device', await rebindArgs(kv.dev));
-          if (re) throw new Error(/rebind denied/i.test(re.message || '') ? 'rebind denied' : 'rebind_device: ' + (re.code || 'ошибка'));
+          if (re) { const e = new Error(/rebind denied/i.test(re.message || '') ? 'rebind denied' : 'rebind_device: ' + (re.message || re.code || 'ошибка')); e.raw = re; throw e; }
           if (!nd) throw new Error('rebind_device вернул пустой id');
           return await adopt(nd);
         } catch (err) {
@@ -193,6 +195,12 @@ function ensureReadyFor(sid) {
               if (r2 && r2.identity_pub === identityPub(Store.load(kv.state))) return await adopt(dev);
             } catch { /* ниже — обычная регистрация */ }
           }
+          // 20.10 (Hack Bot): «old device still has an active session» — прежний сеанс этого браузера не закрыт на сервере.
+          // Новое устройство молча НЕ заводим (копились лишние устройства, ломалась старая история): ключи остаются как есть,
+          // пользователь решает — повторить после закрытия прежнего сеанса или явно зарегистрировать новое устройство.
+          if (/active session/i.test((err && err.message) || '')) throw rebindBlocked();
+          // Сбой сети / сервера (не «denied») — тоже не регистрируем: повторим при следующем запуске
+          if (!/rebind denied/.test((err && err.message) || '') && (isNetErr(err) || !(err && err.raw))) throw err;
           // 'rebind denied' — штатно (старый сеанс отозван/секрет не подошёл): молча заводим новые ключи
           if (!/rebind denied/.test((err && err.message) || '')) console.warn('rebind_device не удался, регистрируем новое устройство:', err && err.message);
           rebindFail = true;

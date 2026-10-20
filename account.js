@@ -22,6 +22,7 @@ function showGoogle(on) { gBtn.hidden = !on; $('googleSep').hidden = !on; }
 })();
 gBtn.onclick = async () => {
   gBtn.disabled = true; gBtn.classList.add('busy');
+  if (window.beforeSignIn && await window.beforeSignIn()) { gBtn.disabled = false; gBtn.classList.remove('busy'); return; }
   const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: REDIRECT } });
   if (error) { gBtn.disabled = false; gBtn.classList.remove('busy'); toast('Не удалось войти через Google: ' + ruErr(error), 3000); }
 };
@@ -93,7 +94,7 @@ nkGo.onclick = async () => {
     nk.show(r === 'rate' ? 'wait' : 'bad', r === 'rate' ? MSG.rate : (MSG[r] || MSG.invalid));
   } catch (e) { nk.show('bad', ruErr(e)); nkGo.disabled = false; }
 };
-$('nickLogout').onclick = async () => { nkDlg.close(); userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* */ } };
+$('nickLogout').onclick = async () => { nkDlg.close(); userSignOut = true; await (window.endSession ? window.endSession() : sb.auth.signOut({ scope: 'local' }).catch(() => {})); };
 let checkedUid = null;
 async function checkChosen(s) {
   if (!s) { checkedUid = null; if (nkDlg.open) nkDlg.close(); return; }

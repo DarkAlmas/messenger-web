@@ -14,6 +14,24 @@ const olderBtn = document.getElementById('olderBtn'); // ссылка сохра
 
 function txt(el, s) { el.textContent = s; }
 // ---------- видимые ошибки: ничего не падает молча ----------
+/** 20.10 (Hack Bot): rebind_device переносит ключи, только если прежний сеанс ЗАКРЫТ на сервере. signOut({scope:'local'}) закрывает
+ *  текущий сеанс на сервере только с живым access-токеном — с истёкшим запрос /logout отклоняется и сеанс остаётся активным.
+ *  Поэтому перед выходом обновляем токен (если он истёк или истекает), затем signOut local. */
+async function endSession() {
+  try { const { data } = await sb.auth.getSession(); const s = data && data.session;
+    if (s && s.expires_at && s.expires_at * 1000 < Date.now() + 60000 && navigator.onLine) await sb.auth.refreshSession().catch(() => {}); } catch (e) { /* */ }
+  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* локальную сессию всё равно чистим */ }
+}
+window.endSession = endSession;
+/** Перед новым входом: сохранённый сеанс ещё действителен — обновляем его (refreshSession) вместо нового входа (true = вход не нужен);
+ *  иначе сначала закрываем его (signOut local), потом входим — тогда rebind_device перенесёт ключи. */
+async function beforeSignIn() {
+  let s = null; try { s = (await sb.auth.getSession()).data.session; } catch (e) { /* */ }
+  if (!s) return false;
+  try { const { data, error } = await sb.auth.refreshSession(); if (!error && data && data.session) { onSession(data.session); return true; } } catch (e) { /* */ }
+  await endSession(); return false;
+}
+window.beforeSignIn = beforeSignIn;
 function showErr(msg) {
   const n = $('notice'); if (!n) { console.warn(msg); return; }
   txt($('noticeText'), msg); n.hidden = false;
@@ -85,6 +103,7 @@ $('loginForm').onsubmit = async e => {
       const { error } = await sb.auth.signUp({ email, password, options: { data: { username, display_name: username } } });
       txt($('authMsg'), error ? ruErr(error) : 'Письмо с подтверждением отправлено на почту. Подтвердите и войдите.');
     } else {
+      if (await beforeSignIn()) return;
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) txt($('authMsg'), ruErr(error));
     }
@@ -110,11 +129,11 @@ const LOGOUT_CONFIRM = LOGOUT_CONFIRM_30D; // подтверждено Hack Bot:
 $('logout').onclick = async () => {
   if (!(await askConfirm(LOGOUT_CONFIRM, 'Выйти'))) return;
   // Ключи остаются (локально и на сервере, 30 дней) — при следующем входе rebind_device вернёт это устройство
-  await window.pushUnregister?.(); userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* локальную сессию всё равно чистим */ } };
+  await window.pushUnregister?.(); userSignOut = true; await endSession(); };
 /** Сеанс этого устройства отозван (revoke_device удаляет ключи сразу): стираем локальные ключи и выходим */
 async function doLogout() {
   try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
-  await window.pushUnregister?.(); userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } }
+  await window.pushUnregister?.(); userSignOut = true; await endSession(); }
 
 // ---------- вход по QR ----------
 const QR_TEXT = 'Откройте приложение на телефоне: меню ⋮ → «Войти на сайте (QR)» и отсканируйте код. Входите только если сами только что открыли этот QR.';
@@ -184,7 +203,7 @@ async function startQr() {
     if (p.status === 'approved') {
       stopQr(); qrState('loading', 'Вход подтверждён, входим…');
       const s = p.session;
-      if (s && s.access_token && s.refresh_token) await sb.auth.setSession({ access_token: s.access_token, refresh_token: s.refresh_token });
+      if (s && s.access_token && s.refresh_token && !(await beforeSignIn())) await sb.auth.setSession({ access_token: s.access_token, refresh_token: s.refresh_token });
     } else if (p.status === 'denied') { stopQr(); qrState('error', 'Вход отклонён на телефоне.'); }
     else if (p.status === 'expired') { stopQr(); qrState('error', 'Срок действия QR истёк.'); }
   }, 3000);
@@ -425,7 +444,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261020f').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261020g').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -475,10 +494,20 @@ function showIdMismatch(e) {
   }).catch(() => txt($('idmmAllHint'), 'Если вы не входили с других устройств, нажмите и смените пароль'));
   $('idmmGo').focus();
 }
+// rebind_device отказал: прежний сеанс браузера ещё активен на сервере. Новое устройство — только по явному выбору.
+let rbAsked = false;
+async function rebindBlockedAsk(e) {
+  showErr(e.userMsg + ' Обновите страницу через минуту или завершите прежний сеанс в «Устройствах» на другом устройстве.');
+  if (rbAsked) return; rbAsked = true;
+  const nw = await askConfirm('Прежний сеанс этого браузера ещё не закрыт на сервере, поэтому ключи шифрования нельзя перенести на новый вход.\n\nМожно подождать и обновить страницу или зарегистрировать это устройство как новое. Новое устройство не сможет прочитать сообщения, отправленные до входа, и появится в списке «Устройства».', 'Новое устройство', 'Подождать');
+  if (!nw) return;
+  try { const m = await e2eMod; await m.resetForRelogin(); e2eErr = null; if (await e2eStart()) { $('notice').hidden = true; toast('Устройство зарегистрировано'); } } catch (x) { console.warn(x); }
+}
 async function e2eStart() {
   if (e2eErr && e2eErr.name === 'LockBusy' && Date.now() - e2eBusyAt < 15000) return false;
   try { const m = await e2eMod; await m.ensureReady(); e2eErr = null; }
   catch (e) { e2eErr = e; if (e && e.name === 'IdentityMismatch') { showIdMismatch(e); return false; }
+    if (e && e.name === 'RebindBlocked') { rebindBlockedAsk(e); return false; }
     // нет сети (страница открыта офлайн, ключи ещё не прочитаны с сервера) — не ошибка: без баннера, повторим при связи
     if (e && e.name !== 'KeysLost' && (!navigator.onLine || isNetErr(e) || /нет соединения|failed to fetch|load failed/i.test(e.message || ''))) { console.warn('E2E: ждём сеть', e && e.message); return false; } if (e && e.name === 'LockBusy') { e2eBusyAt = Date.now(); retryBusySoon(); } console.warn('E2E недоступно:', e); showErr(e && e.userMsg ? e.userMsg : 'Шифрование на этом устройстве не запустилось: ' + ruErr(e) + '. Отправка сообщений невозможна, обновите страницу (Ctrl+F5).'); }
   return E2E && !e2eErr;
@@ -1230,7 +1259,9 @@ async function insertEncrypted(row, pt) {
     else if (checked) error.absent = true; // проверка прошла и подтвердила: строки нет
   }
   if (error) { delete sentOwn[sig]; throw error; }
-  await E2E.rememberOwn(data.id, pt, row.ciphertext.sk);
+  // 20.10 (Support Bot): строка уже на сервере — статус «отправлено» не ждёт локальной записи текста (rememberOwn идёт под общей
+  // блокировкой шифрования и при занятой очереди ждал до LOCK_WAIT = 12 с). Текст пишется в фоне; до записи он есть в sentOwn.
+  E2E.rememberOwn(data.id, pt, row.ciphertext.sk).catch(e => console.warn('rememberOwn', data.id, e && e.message));
   // своё отправленное — сразу в локальный кэш: иначе перерисовка чата из кэша (офлайн/сбой запроса) теряла уже отправленные из очереди
   try { window.cacheOwn?.({ ...row, sender_id: row.sender_id || me.id, created_at: data.created_at || row.created_at || new Date().toISOString() }, pt); } catch (e) { /* */ }
   return data;
@@ -1279,7 +1310,7 @@ async function editEncrypted(m, pt) {
       const r = await E2E.encryptGroup(m.chat_id, epoch, pt);
       sentOwn[r.ct.sk] = pt;
       const { error } = await sb.rpc('edit_message', { p_id: m.id, p_ciphertext: r.ct, p_key_epoch: epoch, p_sender_device: E2E.deviceId() });
-      if (!error) { await E2E.rememberOwn(m.id, pt, r.ct.sk); return; }
+      if (!error) { E2E.rememberOwn(m.id, pt, r.ct.sk).catch(() => {}); return; }
       delete sentOwn[r.ct.sk];
       if (!String(error.message).includes('stale key epoch')) throw error;
     }
@@ -1290,7 +1321,7 @@ async function editEncrypted(m, pt) {
   const sig = ctSig(r.ct); sentOwn[sig] = pt;
   const { error } = await sb.rpc('edit_message', { p_id: m.id, p_ciphertext: r.ct, p_key_epoch: null, p_sender_device: null });
   if (error) { delete sentOwn[sig]; throw error; }
-  await E2E.rememberOwn(m.id, pt);
+  E2E.rememberOwn(m.id, pt).catch(() => {});
 }
 
 // ---------- файлы: AES-256-GCM как в Android (ключ и sha256 внутри зашифрованного сообщения) ----------
@@ -1955,7 +1986,7 @@ async function sessionEnded(err) {
   if (sessionGone) return; sessionGone = true; endedBanner(err);
   try { sb.removeAllChannels(); } catch (e) { /* */ } chan = null; profChan = null; inboxChan = null;
   // ключи не трогаем (правило 30 дней: rebind_device вернёт устройство при следующем входе)
-  try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* */ }
+  await endSession();
   onSession(null);
 }
 async function rtAuth(token) {
