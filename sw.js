@@ -1,7 +1,18 @@
 /* Service worker: офлайн-оболочка сайта (network-first), уведомления, Web Push. */
-const VER = '20261020e'; // меняется с каждой правкой sw.js → браузер ставит новый SW
+const VER = '20261020f'; // меняется с каждой правкой sw.js → браузер ставит новый SW
 const CACHE = 'msgr-shell-' + VER;
-self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(['fonts/material-symbols-rounded.woff2?v=8', 'style.css'])).catch(() => {})); });
+// Установка: кладём в кэш ВСЮ оболочку (index + все скрипты/стили из него + модули E2E + CDN), иначе первая офлайн-перезагрузка не грузит app.js и др.
+const EXTRA = ['./', 'index.html', 'e2e.js?v=20261020d', 'vendor/sigwasm/sigwasm.js?v=20261014k', 'vendor/sigwasm/sigwasm_bg.wasm?v=20261014k', 'fonts/material-symbols-rounded.woff2?v=8'];
+async function precache() {
+  const c = await caches.open(CACHE);
+  let urls = [...EXTRA];
+  try { const html = await (await fetch('./', { cache: 'no-cache' })).text(); for (const m of html.matchAll(/<(?:script|link|img)[^>]+(?:src|href)="([^"]+)"/g)) if (!/^(data:|#|mailto:)/.test(m[1])) urls.push(m[1]); } catch (e) { /* */ }
+  // модули, подгружаемые из скриптов (import('./e2e.js?v=…'), import … from './vendor/…') — тоже в кэш
+  for (const js of ['app.js', 'e2e.js']) { try { const src = urls.find(u => u.split('?')[0] === js) || js; const t = await (await fetch(new URL(src, self.registration.scope).href, { cache: 'no-cache' })).text(); for (const m of t.matchAll(/(?:import\(|from\s*)'\.\/([^']+)'/g)) urls.push(m[1]); } catch (e) { /* */ } }
+  urls = [...new Set(urls)];
+  await Promise.all(urls.map(async u => { try { const abs = new URL(u, self.registration.scope); const cdn = abs.host === 'cdn.jsdelivr.net'; const res = await fetch(abs.href, cdn ? { mode: 'no-cors' } : { cache: 'no-cache' }); if (res.ok || (cdn && res.type === 'opaque')) await c.put(abs.href, res); } catch (e) { /* один файл не помешает остальным */ } }));
+}
+self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(precache()); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('msgr-shell-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
   const r = e.request; if (r.method !== 'GET') return;

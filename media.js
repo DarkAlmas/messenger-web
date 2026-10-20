@@ -41,6 +41,11 @@ window.cacheMsg = (m, pl) => {
   (pending[m.chat_id] = pending[m.chat_id] || {})[m.id] = { m, pt: ptOf(pl) };
   clearTimeout(cacheT); cacheT = setTimeout(flushCache, 500);
 };
+window.cacheOwn = (m, pt) => {
+  if (!me || !m || !m.id || !m.chat_id || !m.ciphertext) return;
+  (pending[m.chat_id] = pending[m.chat_id] || {})[m.id] = { m, pt };
+  clearTimeout(cacheT); cacheT = setTimeout(flushCache, 300);
+};
 let flushing = Promise.resolve();
 function flushCache() { flushing = flushing.then(flushCacheNow, flushCacheNow); return flushing; } // по очереди: параллельные записи затирали друг друга
 async function flushCacheNow() {
@@ -86,6 +91,9 @@ function computeConn() {
   if (inboxChan && inboxChan.state && inboxChan.state !== 'joined') return 'connecting';
   return 'ok';
 }
+// очередь ждёт отправки после возврата сети — в шапке «Соединение…», пока не уйдёт (дизайн 20.10)
+const queueBusy = () => Object.values(outbox).some(j => !j.hold && (j.waitNet || j.flushing));
+const dispConn = b => b === 'ok' && queueBusy() ? 'connecting' : b;
 function paintConn() {
   const el = $('connSt'); if (!el) return;
   el.hidden = conn === 'ok'; txt($('connTxt'), conn === 'offline' ? 'Ожидание сети…' : 'Соединение…');
@@ -93,10 +101,10 @@ function paintConn() {
 }
 function tickConn() {
   if (!me) return;
-  const n = computeConn();
+  const base = computeConn(), n = dispConn(base);
   if (n !== conn) { conn = n; paintConn(); if (currentChat) paintSub(); }
-  if (conn === 'ok' && wasDown) { wasDown = false; caughtUp(); }
-  if (conn !== 'ok') { wasDown = true; revive(); }
+  if (base === 'ok' && wasDown) { wasDown = false; caughtUp(); }
+  if (base !== 'ok') { wasDown = true; revive(); }
   paintNetLine();
 }
 let reviveAt = 0;
@@ -124,8 +132,19 @@ async function caughtUp() {
   flushOutbox();
 }
 window.caughtUp = caughtUp;
-function flushOutbox() { for (const job of Object.values(outbox)) { const d = msgEls[job.id]; if (!job.hold && (job.waitNet || !d || d.dataset.state === 'failed')) { job.waitNet = false; job.auto = 3; outRun(job); } } }
-addEventListener('online', () => { tickConn(); setTimeout(flushOutbox, 1500); });
+let flushT = null;
+function flushOutbox() {
+  if (!navigator.onLine) return;
+  for (const job of Object.values(outbox)) { const d = msgEls[job.id]; if (!job.hold && !job.running && (job.waitNet || !d || d.dataset.state === 'failed')) { job.waitNet = false; job.flushing = true; job.auto = 15; outRun(job).finally(() => { if (outbox[job.id] && !job.auto) job.flushing = false; tickConn(); }); } }
+  tickConn();
+}
+window.flushOutbox = flushOutbox;
+addEventListener('online', () => {
+  // сеть вернулась: прошлые сбои запросов не считаем, сразу поднимаем realtime, шифрование и отправляем очередь (не ждём ~50 с)
+  netFailAt = 0; reviveAt = 0; tickConn(); revive();
+  try { if (e2eErr && e2eErr.name !== 'IdentityMismatch' && e2eErr.name !== 'KeysLost') { e2eErr = null; e2eStart(); } } catch { /* */ }
+  flushOutbox(); clearTimeout(flushT); flushT = setTimeout(flushOutbox, 1500);
+});
 addEventListener('offline', tickConn);
 setInterval(tickConn, 1000);
 

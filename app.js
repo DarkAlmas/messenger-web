@@ -930,9 +930,9 @@ async function openChat(c, li) {
   if (cached.length) $('messages').scrollTop = $('messages').scrollHeight; else window.showSkeletons?.();
   let { data, error } = navigator.onLine ? await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE) : { data: null, error: new Error('Нет соединения с сервером') };
   window.hideSkeletons?.();
-  if (error) { if (cached.length) { data = null; toast('Нет соединения — показаны сохранённые сообщения'); } else if (navigator.onLine) showErr('Не удалось загрузить сообщения: ' + ruErr(error)); }
+  if (error) { if (cached.length) { data = null; if (navigator.onLine && !(window.connState && window.connState() === 'offline') && !Object.values(outbox).some(j => j.chat && j.chat.id === c.id)) toast('Нет соединения — показаны сохранённые сообщения'); } else if (navigator.onLine) showErr('Не удалось загрузить сообщения: ' + ruErr(error)); }
   if (currentChat !== c) return;
-  if (error && (cached.length || !navigator.onLine)) { for (const j of Object.values(outbox)) if (j.chat && j.chat.id === c.id && !msgEls[j.id]) { try { outBubble(j); } catch (e) { /* */ } } window.paintNetLine?.(); return; }
+  if (error && (cached.length || !navigator.onLine)) { reAddQueued(c); return; }
   // Сначала все пузыри сразу (заглушка «Расшифровка…»), потом расшифровка по порядку: зависшее шифрование не прячет сообщения
   const list = (data || []).reverse(), els = list.map(m => { const o = msgEls[m.id]; if (o) { $('messages').appendChild(o); return o; } return placeMsg(m, d => $('messages').appendChild(d)); });
   $('messages').scrollTop = $('messages').scrollHeight;
@@ -943,8 +943,7 @@ async function openChat(c, li) {
   if (data && data.length) oldestAt = data[0].created_at;
   olderBtn.hidden = !(data && data.length === PAGE);
   if (!(data || []).length) { const p = document.createElement('p'); p.className = 'empty-state'; txt(p, 'Сообщений пока нет. Всё, что вы напишете, будет зашифровано сквозным шифрованием.'); $('messages').append(p); }
-  for (const j of Object.values(outbox)) if (j.chat && j.chat.id === c.id && !msgEls[j.id]) { try { outBubble(j); } catch (e) { console.error('outBubble', e); } } // очередь (в т.ч. после перезагрузки)
-  window.paintNetLine?.();
+  reAddQueued(c); // очередь (в т.ч. после перезагрузки) и только что отправленные из неё
   await loadReadState();
   loadReacts((data || []).map(m => m.id));
   paintPinBar(); redoSeps();
@@ -1107,6 +1106,18 @@ $('sendForm').onsubmit = async e => {
 };
 // ---------- исходящие: пузырь сразу, статус schedule → check → done_all → done_all (синий); ошибка → error, меню «Повторить»/«Удалить» ----------
 const outbox = {}; // id → задание
+// Отправленные из очереди за последние 2 мин: чат мог перерисоваться, пока шла отправка (запрос списка ушёл раньше вставки),
+// и сообщение пропадало у отправителя, хотя у получателя есть. Сверка по id сообщения (id задаёт клиент) — без дублей.
+const recentSent = {};
+function reAddQueued(c) {
+  for (const j of Object.values(outbox)) if (j.chat && j.chat.id === c.id && !msgEls[j.id]) { try { outBubble(j); } catch (e) { console.error('outBubble', e); } }
+  for (const [id, x] of Object.entries(recentSent)) {
+    if (Date.now() - x.t > 120000) { delete recentSent[id]; continue; }
+    if (x.job.chat.id !== c.id || msgEls[id]) continue;
+    try { outBubble(x.job); const el = msgEls[id]; if (el) { delete el.dataset.state; if (x.at) el.dataset.at = x.at; paintTicks(el); } } catch (e) { console.error('outBubble', e); }
+  }
+  window.paintNetLine?.();
+}
 function outBubble(job) {
   const d = document.createElement('div'); d.dataset.id = job.id; msgEls[job.id] = d;
   d.className = 'msg mine'; d.dataset.at = job.at || new Date().toISOString(); d.dataset.sender = me.id; d.dataset.state = job.hold ? 'failed' : 'sending';
@@ -1122,17 +1133,22 @@ function outBubble(job) {
   const box = $('messages'); const e = box.querySelector('.empty-state'); if (e) e.remove();
   box.appendChild(d); box.scrollTop = box.scrollHeight; paintTicks(d); return d;
 }
-async function outRun(job) {
+// один запуск на сообщение одновременно (онлайн-событие, переподключение и автоповтор не отправляют дважды)
+async function outRun(job, fresh) {
+  if (job.running) return false; job.running = true;
+  try { return await outRun0(job, fresh); } finally { job.running = false; }
+}
+async function outRun0(job, fresh) {
   delete job.hold; // явный повтор пользователем
   const d = msgEls[job.id]; if (d) { d.dataset.state = 'sending'; paintTicks(d); }
-  if (!navigator.onLine) { job.waitNet = true; window.paintNetLine?.(); return false; } // без сети — сразу в очередь, без попытки
+  if (!navigator.onLine || (fresh && window.connState && window.connState() === 'offline')) { job.waitNet = true; window.paintNetLine?.(); window.saveOutbox?.(); return false; } // без сети (известно) — сразу в очередь, без попытки
   try {
     // повтор: если сообщение уже на сервере — просто отмечаем отправленным, ничего не загружаем заново
     const had = job.tries ? await onServer(job.id).catch(() => null) : null;
     job.tries = (job.tries || 0) + 1;
     const extra = { ...job.extra, id: job.id };
     const row = had || await sendDeadline(job.kind === 'text' ? sendPayload(job.chat, JSON.stringify({ v: 1, t: job.text }), extra) : sendFile(job.chat, job.file, extra, job.caption, undefined, job), job);
-    delete outbox[job.id]; job.waitNet = false; window.saveOutbox?.(); window.paintNetLine?.();
+    delete outbox[job.id]; job.waitNet = false; job.flushing = false; recentSent[job.id] = { job, at: row && row.created_at, t: Date.now() }; window.saveOutbox?.(); window.paintNetLine?.();
     const el = msgEls[job.id];
     if (el) { delete el.dataset.state; if (row && row.created_at) el.dataset.at = row.created_at; paintTicks(el); } // время сервера, не часы клиента
     return true;
@@ -1141,12 +1157,12 @@ async function outRun(job) {
     const el = msgEls[job.id];
     // нет сети — не «ошибка», а ожидание: часы остаются, отправим при появлении связи (media.js flushOutbox)
     const netish = isNetErr(err) || /Нет связи с сервером|нет ответа сервера|failed to fetch/i.test((err && (err.userMsg || err.message)) || '');
-    if (!navigator.onLine || (window.connState && window.connState() === 'offline')) { job.waitNet = true; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); } window.paintNetLine?.(); return false; }
+    if (!navigator.onLine || (window.connState && window.connState() === 'offline')) { job.waitNet = true; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); } window.paintNetLine?.(); if (navigator.onLine) setTimeout(() => window.flushOutbox?.(), 3000); return false; } // сеть формально есть — пробуем снова, не ждём переподключения
     if (job.auto > 0 && netish) { // автоповтор после возврата сети: связь ещё поднимается — ждём, не краснеем
       job.auto--; if (el && el.dataset.state) { el.dataset.state = 'sending'; paintTicks(el); }
-      setTimeout(() => { if (outbox[job.id]) outRun(job); }, 3000); return false;
+      setTimeout(() => { if (outbox[job.id]) outRun(job); }, navigator.onLine ? 2000 : 3000); return false;
     }
-    job.waitNet = false;
+    job.waitNet = false; job.flushing = false;
     if (el && el.dataset.state) { el.dataset.state = 'failed'; paintTicks(el); }
     window.saveOutbox?.(); // после перезагрузки — красное с «Повторить», без автоотправки
     if (!job.toasted && !(err && err.quiet)) { job.toasted = true; toast(err && err.userMsg ? err.userMsg : 'Не отправлено: ' + ruErr(err), 6000); } // тост один раз на сообщение
@@ -1156,7 +1172,7 @@ async function outRun(job) {
 function outSend(job) {
   job.id = crypto.randomUUID(); job.at = new Date().toISOString(); outbox[job.id] = job; window.saveOutbox?.();
   try { if (currentChat && currentChat.id === job.chat.id) outBubble(job); } catch (e) { console.error('outBubble', e); }
-  return outRun(job);
+  return outRun(job, true);
 }
 // Отправка никогда не висит молча: общий предел на всё задание (шифрование, ключи, загрузка, вставка)
 let SEND_TEXT_MS = 45000, SEND_FILE_MS = 180000; // let: тесты уменьшают предел
@@ -1201,6 +1217,8 @@ async function insertEncrypted(row, pt) {
   }
   if (error) { delete sentOwn[sig]; throw error; }
   await E2E.rememberOwn(data.id, pt, row.ciphertext.sk);
+  // своё отправленное — сразу в локальный кэш: иначе перерисовка чата из кэша (офлайн/сбой запроса) теряла уже отправленные из очереди
+  try { window.cacheOwn?.({ ...row, sender_id: row.sender_id || me.id, created_at: data.created_at || row.created_at || new Date().toISOString() }, pt); } catch (e) { /* */ }
   return data;
 }
 const NO_PLAIN = ' Сайт никогда не отправляет сообщения без сквозного шифрования.';
