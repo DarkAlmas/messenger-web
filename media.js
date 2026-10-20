@@ -318,6 +318,58 @@ function mediaSrcs(f) {
   }).catch(e => { delete mediaSrcCache[f.p]; throw e; });
 }
 window.mediaSrcs = mediaSrcs;
+// ---------- аудио/видео-файлы вложением (дизайн 20.10): mp3/m4a — плеер как у голосового, вместо волны имя файла;
+// mp4/webm — превью 16:9 с ▶ шириной как у картинки; остальные — карточка файла ----------
+const AUD_EXT = { mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', weba: 'audio/webm' };
+const VID_EXT = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm' };
+function avKind(f) {
+  const m = String(f.m || '').split(';')[0].trim().toLowerCase(), ext = String(f.n || '').toLowerCase().split('.').pop(), gen = !m || m === 'application/octet-stream';
+  if (/^audio\/(mpeg|mp3|mp4|x-m4a|m4a|aac|ogg|wav|x-wav|webm)$/.test(m)) return { k: 'audio', m: m.replace('x-m4a', 'mp4').replace(/^audio\/m4a$/, 'audio/mp4').replace('mp3', 'mpeg').replace('x-wav', 'wav') };
+  if (gen && AUD_EXT[ext]) return { k: 'audio', m: AUD_EXT[ext] };
+  if (/^video\/(mp4|webm|x-m4v)$/.test(m)) return { k: 'video', m: m.replace('x-m4v', 'mp4') };
+  if (gen && VID_EXT[ext]) return { k: 'video', m: VID_EXT[ext] };
+  return null;
+}
+window.avKind = avKind;
+window.fileMediaEl = (f0, download) => {
+  const av = avKind(f0); if (!av || !f0.p) return null;
+  const f = { ...f0, m: av.m };
+  if (av.k === 'audio') {
+    const row = document.createElement('div'); row.className = 'voice afile heard';
+    const btn = iconBtn('play_arrow', 'Воспроизвести ' + safeName(f.n), 'v-play');
+    const name = document.createElement('div'); name.className = 'af-name'; txt(name, safeName(f.n));
+    const dur = document.createElement('span'); dur.className = 'v-dur'; txt(dur, f.d ? fmtDur(f.d) : '');
+    const dl = iconBtn('download', 'Скачать и расшифровать', 'af-dl'); dl.onclick = ev => { ev.stopPropagation(); download && download(); };
+    row.append(btn, name, dur, dl);
+    let au = null;
+    btn.onclick = async ev => {
+      ev.stopPropagation(); if (au && !au.paused) { au.pause(); return; }
+      btn.disabled = true;
+      try {
+        if (!au) { au = new Audio(await mediaUrl(f)); au.onloadedmetadata = () => { if (isFinite(au.duration)) txt(dur, fmtDur(au.duration)); }; au.ontimeupdate = () => txt(dur, fmtDur(au.currentTime)); au.onplay = () => txt(btn.querySelector('.ms'), 'pause'); au.onpause = () => txt(btn.querySelector('.ms'), 'play_arrow'); au.onended = () => { txt(btn.querySelector('.ms'), 'play_arrow'); if (isFinite(au.duration)) txt(dur, fmtDur(au.duration)); }; }
+        if (playing && playing !== au) playing.pause(); playing = au; await au.play();
+      } catch (e) { toast('Не удалось воспроизвести файл', 3000); } finally { btn.disabled = false; }
+    };
+    return row;
+  }
+  const box = document.createElement('div'); box.className = 'vfile'; box.setAttribute('role', 'button'); box.setAttribute('aria-label', 'Видео ' + safeName(f.n));
+  const ph = document.createElement('span'); ph.className = 'round-ph ms'; ph.setAttribute('aria-hidden', 'true'); txt(ph, 'play_arrow');
+  const cap = document.createElement('div'); cap.className = 'vf-cap'; txt(cap, safeName(f.n) + (f.s ? ' · ' + fmtSize(f.s) : ''));
+  const dl = iconBtn('download', 'Скачать и расшифровать', 'vf-dl'); dl.onclick = ev => { ev.stopPropagation(); download && download(); };
+  box.append(ph, cap, dl);
+  let v = null;
+  box.onclick = async ev => {
+    ev.stopPropagation(); if (v) return;
+    ph.classList.add('spin'); txt(ph, 'progress_activity');
+    try {
+      const list = await mediaSrcs(f); v = document.createElement('video'); v.controls = true; v.playsInline = true; v.setAttribute('playsinline', ''); let i = 0;
+      v.onerror = () => { if (++i < list.length) { v.src = list[i]; v.play().catch(() => {}); } else { v.remove(); v = null; ph.classList.remove('spin'); txt(ph, 'videocam_off'); txt(cap, 'Видео повреждено'); } };
+      v.onloadeddata = () => { ph.remove(); cap.remove(); box.classList.add('playing'); };
+      v.src = list[0]; box.prepend(v); v.play().catch(() => {});
+    } catch (e) { v = null; ph.classList.remove('spin'); txt(ph, 'play_arrow'); toast(e && e.corrupt ? 'Видео повреждено' : 'Не удалось загрузить видео', 3000); }
+  };
+  return box;
+};
 function mediaUrl(f) { if (f.local) return Promise.resolve(f.local); /* своё неотправленное — из записанного Blob */ return mediaUrls[f.p] = mediaUrls[f.p] || fetchFilePlain(f).then(p => URL.createObjectURL(new Blob([p], { type: playMime(f, p) }))).catch(e => { delete mediaUrls[f.p]; throw e; }); }
 const heardKey = id => 'msgr-heard:' + id;
 const isHeard = id => { try { return !!localStorage.getItem(heardKey(id)); } catch { return false; } };

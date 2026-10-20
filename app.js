@@ -548,12 +548,18 @@ async function renderMsg(m, d) {
       if (!mine) { sendDlv(m); seenIO.observe(d); }
       if (pl.f && (pl.f.vk === 'voice' || pl.f.vk === 'round') && window.mediaEl) { d.querySelectorAll(':scope > .round-wrap, :scope > .round-v, :scope > .voice').forEach(x => x.remove()); /* повторная отрисовка (эхо своего, расшифровка) — без второго круга */ d.insertBefore(mediaEl(pl.f, m, !mine), b); d.classList.add(pl.f.vk === 'round' ? 'round-msg' : 'voice-msg'); }
       else if (pl.f) {
+        const fm = window.fileMediaEl && window.fileMediaEl(pl.f, () => downloadFile(pl.f, !mine).catch(e => toastLong(e.userMsg || ruErr(e))));
+        if (fm) { d.querySelectorAll(':scope > .afile, :scope > .vfile').forEach(x => x.remove()); d.insertBefore(fm, b); d.classList.add(fm.classList.contains('vfile') ? 'vfile-msg' : 'voice-msg'); }
         const fb = fileRow(pl.f, !mine);
-        const pv = imagePreview(pl.f, pl.t, !mine, bad => { pv.replaceWith(bad ? brokenRow(pl.f) : fb); d.classList.remove('has-img', 'img-only'); });
+        const pv = fm ? null : imagePreview(pl.f, pl.t, !mine, bad => { pv.replaceWith(bad ? brokenRow(pl.f) : fb); d.classList.remove('has-img', 'img-only'); });
         if (pv) { d.insertBefore(pv, b); d.classList.add('has-img'); if (!pl.t) d.classList.add('img-only'); } // подпись под картинкой; скачать — в просмотре
-        else d.append(fb);
+        else if (!fm) d.append(fb);
       }
       lock.className = 'lock'; lock.title = 'Сквозное шифрование'; txt(lock, '🔒');
+    } else if (pl && pl.other) {
+      // зашифровано для устройств, бывших до входа здесь: нейтральная серая строка, без «одной галочки навсегда»
+      b.className = 'body e2e other-dev'; txt(b, 'Отправлено до входа на этом устройстве'); d.classList.add('other-dev'); lock.className = 'lock'; txt(lock, '\u{1F512}');
+      if (!mine) { sendDlv(m); seenIO.observe(d); } // сообщение дошло до этого устройства (прочитать нельзя, но не «висит»)
     } else { b.className = 'body e2e'; txt(b, pl && pl.pending ? 'Расшифровка…' : pl && pl.other ? 'Зашифровано для другого устройства' : pl && pl.fail ? 'Не удалось расшифровать' : 'Зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
   } else {
     txt(b, m.body);
@@ -1399,6 +1405,8 @@ function sniffImage(p) {
 function imagePreview(f, caption, fromOther, onFallback) {
   const mime = imgMime(f); if (!mime || !f.p || !f.h || (f.s && f.s > 15 * 1048576)) return null;
   const box = document.createElement('div'); box.className = 'img-prev loading'; box.setAttribute('aria-label', 'Загрузка ' + (f.s ? fmtSize(f.s) : ''));
+  // размер заглушки — по метаданным из шифротекста (iw/ih), если есть; иначе стандартный блок
+  if (+f.iw > 0 && +f.ih > 0) { const w = Math.min(260, +f.iw), h = Math.max(80, Math.min(340, Math.round(w * +f.ih / +f.iw))); box.style.width = w + 'px'; box.style.height = h + 'px'; }
   const sp = document.createElement('span'); sp.className = 'spinner'; box.append(sp);
   (imgUrls[f.p] = imgUrls[f.p] || fetchFilePlain(f).then(p => {
     const real = sniffImage(p);
@@ -1414,6 +1422,11 @@ function imagePreview(f, caption, fromOther, onFallback) {
     .catch(e => {
       delete imgUrls[f.p]; box.classList.remove('loading'); box.removeAttribute('aria-label'); box.onclick = null;
       if (e && (e.notImage || e.corrupt) && onFallback) return onFallback(!!e.corrupt); // не картинка — как файл; повреждён — строка ошибки
+      if (!navigator.onLine || (window.connState && window.connState() === 'offline') || isNetErr(e)) { // без сети — серый блок с иконкой, без ошибки; загрузим при появлении сети
+        box.textContent = ''; box.classList.add('offline'); box.setAttribute('aria-label', 'Картинка загрузится, когда появится сеть'); box.append(msIcon('image', 'ip-ic'));
+        const again = () => { removeEventListener('online', again); setTimeout(() => { if (!box.isConnected) return; const nb = imagePreview(f, caption, fromOther, onFallback); if (nb) box.replaceWith(nb); }, 1500); };
+        addEventListener('online', again); return;
+      }
       txt(box, 'Не удалось загрузить картинку');
     });
   return box;
