@@ -402,7 +402,7 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .chats-title{margin:10px 14px 4px;font-size:20px;font-weight:600;display:flex;align-items:center}
 .conn-st{color:var(--muted);font-weight:400;font-size:15px;margin-left:4px;display:inline-flex;align-items:center;gap:4px}
 .conn-st[hidden]{display:none}
-.spin14{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:spin14 .8s linear infinite}
+.spin14{box-sizing:border-box;width:14px;height:14px;flex:none;border:2px solid rgba(127,127,127,.28);border-top-color:currentColor;border-radius:50%;display:inline-block;animation:spin14 .8s linear infinite} /* один и тот же серый спиннер для «Соединение…» и «Ожидание сети…» */
 @keyframes spin14{to{transform:rotate(360deg)}}
 #chatSub.conn{color:var(--muted)}
 .msg.skel .body{color:transparent!important;background:linear-gradient(90deg,var(--line) 25%,rgba(127,127,127,.18) 50%,var(--line) 75%);background-size:200% 100%;animation:skel 1.2s infinite;border-radius:8px;min-width:120px;display:inline-block}
