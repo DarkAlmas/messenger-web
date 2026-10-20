@@ -51,6 +51,7 @@
     <header class="bar">
       <button type="button" id="meBtn" class="me" title="Мой профиль"><span id="meAva" class="ava"></span><b id="me"></b></button>
     </header>
+    <h2 id="chatsTitle" class="chats-title">Чаты<span id="connSt" class="conn-st" hidden> (<span class="spin14" aria-hidden="true"></span><span id="connTxt">Соединение…</span>)</span></h2>
     <form class="actions" id="findForm">
       <input id="findUser" placeholder="Никнейм собеседника (@nick)" autocomplete="off">
       <button id="newDirect" type="submit"><span class="lbl">Написать</span></button>
@@ -70,11 +71,14 @@
     <div id="messages"><button type="button" id="olderBtn" class="ghost older" hidden>Загрузить более ранние сообщения</button><p class="empty-state">Выберите чат слева или найдите собеседника по никнейму.</p></div>
     <button type="button" id="jumpBtn" class="jump" aria-label="Вниз к последним сообщениям" title="Вниз" hidden><span class="ms" aria-hidden="true">keyboard_arrow_down</span><span id="jumpCount" hidden></span></button>
     <div id="composeBar" hidden><span id="composeIcon" class="ms" aria-hidden="true">reply</span><div class="cb-text"><b id="composeTitle"></b><span id="composePreview"></span></div><button type="button" id="composeCancel" class="icon" aria-label="Отменить" title="Отменить"><span class="ms" aria-hidden="true">close</span></button></div>
+    <div id="roundBox" class="round-box" hidden><video id="roundPrev" playsinline muted></video><svg viewBox="0 0 240 240" aria-hidden="true"><circle cx="120" cy="120" r="110" id="roundRing"/></svg></div>
     <form id="sendForm" hidden>
       <button type="button" id="attachBtn" class="icon" title="Отправить файл (до 25 МБ, со сквозным шифрованием)" aria-label="Прикрепить файл"><span class="ms" aria-hidden="true">attach_file</span></button>
       <input type="file" id="fileInput" hidden>
       <input id="msgInput" maxlength="4000" placeholder="Сообщение" autocomplete="off">
       <button type="submit" id="sendBtn" aria-label="Отправить"><span class="ms" aria-hidden="true">send</span></button>
+      <button type="button" id="micBtn" class="icon mic" aria-label="Голосовое сообщение"><span class="ms" aria-hidden="true">mic</span></button>
+      <div id="recBar" class="rec-bar" hidden><span class="rec-dot" aria-hidden="true"></span><span id="recTime">0:00</span><button type="button" id="recCancel" class="link rec-cancel">‹ Отмена</button><span id="recLock" class="rec-lock" hidden><button type="button" id="recSend" class="icon" aria-label="Отправить запись"><span class="ms" aria-hidden="true">send</span></button></span><span class="rec-hint ms" aria-hidden="true">lock</span></div>
     </form>
   </main>
   <section id="settings" class="page" aria-label="Настройки">
@@ -197,7 +201,8 @@
 <script src="vendor/hash-wasm/argon2.umd.min.js?v=4.12.0"></script>
 <script src="backup.js?v=20261015zo"></script>
 <script src="config.js?v=20261015zo"></script>
-<script src="app.js?v=20261015zt"></script>
+<script src="app.js?v=20261020a"></script>
+<script src="media.js?v=20261020a"></script>
 <script src="version.js?v=1"></script>
 <script src="account.js?v=20261015zo"></script>
 <script src="appbanner.js?v=20261015zo"></script>

@@ -398,3 +398,47 @@ dialog.confirm{max-width:340px}.confirm .dlg-actions{display:flex;justify-conten
 .idmm-box{width:100%;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .idmm #idmmAll{align-self:center;margin-top:8px}
 .idmm-hint{margin:0;width:100%;text-align:center;color:var(--muted);font-size:13px}
+/* ---- соединение, скелетоны, голосовые и кружки (20.10) ---- */
+.chats-title{margin:10px 14px 4px;font-size:20px;font-weight:600;display:flex;align-items:center}
+.conn-st{color:var(--muted);font-weight:400;font-size:15px;margin-left:4px;display:inline-flex;align-items:center;gap:4px}
+.conn-st[hidden]{display:none}
+.spin14{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:spin14 .8s linear infinite}
+@keyframes spin14{to{transform:rotate(360deg)}}
+#chatSub.conn{color:var(--muted)}
+.msg.skel .body{color:transparent!important;background:linear-gradient(90deg,var(--line) 25%,rgba(127,127,127,.18) 50%,var(--line) 75%);background-size:200% 100%;animation:skel 1.2s infinite;border-radius:8px;min-width:120px;display:inline-block}
+.msg.skel-ph{height:38px;opacity:.7;background:linear-gradient(90deg,var(--line) 25%,rgba(127,127,127,.18) 50%,var(--line) 75%)!important;background-size:200% 100%!important;animation:skel 1.2s infinite}
+@keyframes skel{to{background-position:-200% 0}}
+#sendForm{position:relative}
+#micBtn{width:44px;height:44px;border-radius:50%;flex:none;touch-action:none;user-select:none}
+#micBtn[hidden],#sendBtn[hidden]{display:none}
+.rec-bar{position:absolute;inset:0 56px 0 0;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);z-index:2}
+.rec-bar[hidden]{display:none}
+.rec-dot{width:10px;height:10px;border-radius:50%;background:#e53935;animation:recb 1s infinite}
+@keyframes recb{50%{opacity:.25}}
+#recTime{font-variant-numeric:tabular-nums;min-width:40px}
+.rec-cancel{margin-left:auto;transition:transform .05s}
+.rec-hint{color:var(--muted);font-size:18px}
+.rec-lock[hidden]{display:none}
+#sendForm.recording #micBtn{background:#e53935;color:#fff;transform:scale(1.15)}
+.round-box{position:absolute;left:50%;bottom:90px;transform:translateX(-50%);width:240px;height:240px;z-index:5}
+.round-box[hidden]{display:none}
+.round-box video{width:240px;height:240px;border-radius:50%;object-fit:cover;transform:scaleX(-1);background:#000}
+.round-box svg{position:absolute;inset:0;transform:rotate(-90deg)}
+#roundRing{fill:none;stroke:#e53935;stroke-width:6;stroke-dasharray:691;stroke-dashoffset:691;stroke-linecap:round}
+#chatPane{position:relative}
+.voice{display:flex;align-items:center;gap:8px;min-width:200px;padding:2px 0}
+.voice .v-play{width:36px;height:36px;border-radius:50%;background:var(--accent);color:#fff;flex:none}
+.v-wave{display:flex;align-items:center;gap:2px;height:26px;flex:1}
+.v-wave i{width:3px;border-radius:2px;background:var(--muted);opacity:.55;display:block}
+.voice:not(.heard) .v-wave i{background:var(--accent);opacity:.9}
+.voice.heard .v-wave i.on,.voice .v-wave i.on{background:#4FC3F7;opacity:1}
+.v-dur{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.msg.round-msg{background:none!important;box-shadow:none!important;padding:0!important}
+.msg.round-msg .body:empty{display:none}
+.round-v{position:relative;width:200px;height:200px;border-radius:50%;overflow:hidden;cursor:pointer;transition:width .2s,height .2s;background:#000}
+.round-v.big{width:300px;height:300px}
+.round-v video{width:100%;height:100%;object-fit:cover}
+.round-dur{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);font-size:12px;color:#fff;background:rgba(0,0,0,.45);padding:1px 6px;border-radius:9px}
+/* галочки по спецификации Design Bot 20.10: прочитано — #4FC3F7, смена цвета 150 мс */
+.msg .ticks.ms{transition:color .15s,opacity .15s}
+.msg .ticks.ms.read,.msg.mine .ticks.ms.read{color:#4FC3F7;opacity:1;filter:none}

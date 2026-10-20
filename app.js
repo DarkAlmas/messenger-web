@@ -110,11 +110,11 @@ const LOGOUT_CONFIRM = LOGOUT_CONFIRM_30D; // подтверждено Hack Bot:
 $('logout').onclick = async () => {
   if (!(await askConfirm(LOGOUT_CONFIRM, 'Выйти'))) return;
   // Ключи остаются (локально и на сервере, 30 дней) — при следующем входе rebind_device вернёт это устройство
-  userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* локальную сессию всё равно чистим */ } };
+  await window.pushUnregister?.(); userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* локальную сессию всё равно чистим */ } };
 /** Сеанс этого устройства отозван (revoke_device удаляет ключи сразу): стираем локальные ключи и выходим */
 async function doLogout() {
   try { if (E2E && E2E.deviceId()) { await sb.from('devices_keys').delete().eq('device_id', E2E.deviceId()); await E2E.wipe(); } } catch (e) { /* не мешаем выходу */ }
-  userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } }
+  await window.pushUnregister?.(); userSignOut = true; try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* сеть недоступна — локальную сессию всё равно чистим */ } }
 
 // ---------- вход по QR ----------
 const QR_TEXT = 'Откройте приложение на телефоне: меню ⋮ → «Войти на сайте (QR)» и отсканируйте код. Входите только если сами только что открыли этот QR.';
@@ -202,17 +202,23 @@ async function loadChats() {
     sb.from('chat_members').select('chat_id, pinned, muted_until, archived, role').eq('user_id', me.id)
   ]);
   if (!me || me.id !== who.id) return;
-  if (error || pe) { showErr('Не удалось загрузить чаты: ' + ruErr(error || pe)); return; }
+  if (error || pe) { if (await window.chatsFromCache?.()) return; showErr('Не удалось загрузить чаты: ' + ruErr(error || pe)); return; }
   const pm = {}; for (const p of prefs || []) pm[p.chat_id] = p;
   lastChats = (data || []).map(c => ({ id: c.chat_id, kind: c.kind, title: c.kind === 'direct' ? null : c.title, name: c.title, peer: c.peer_id, last_at: c.last_at, last_sender: c.last_sender, last_has_file: c.last_has_file, unread: c.unread, ...(pm[c.chat_id] || {}) }));
   lastChats.sort((x, y) => (y.pinned ? 1 : 0) - (x.pinned ? 1 : 0) || new Date(y.last_at) - new Date(x.last_at));
+  window.cacheChats?.(lastChats);
+  renderChats();
+}
+/** Отрисовка списка чатов из lastChats (с сервера или из офлайн-кэша). */
+function renderChats() {
+  if (!me) return; const ul = $('chatList');
   const archived = lastChats.filter(c => c.archived), visible = lastChats.filter(c => !!c.archived === showArchive);
   ul.innerHTML = '';
   if (showArchive) {
     const li = document.createElement('li'); li.className = 'archive-row'; li.tabIndex = 0;
     const ava = avatarEl({ display_name: '←', id: 'x' }); txt(ava, 'arrow_back'); ava.classList.add('ms');
     const meta = document.createElement('div'); meta.className = 'meta'; const nm = document.createElement('div'); nm.className = 'name'; txt(nm, 'Архив'); const sub = document.createElement('div'); sub.className = 'sub'; txt(sub, 'Назад ко всем чатам'); meta.append(nm, sub);
-    li.append(ava, meta); li.onclick = () => { showArchive = false; loadChats(); }; ul.append(li);
+    li.append(ava, meta); li.onclick = () => { showArchive = false; renderChats(); loadChats(); }; ul.append(li);
   } else if (archived.length) {
     const li = document.createElement('li'); li.className = 'archive-row'; li.tabIndex = 0; li.dataset.archive = '1';
     const ava = avatarEl({ display_name: '🗄', id: 'x' }); txt(ava, 'archive'); ava.classList.add('ms');
@@ -220,7 +226,7 @@ async function loadChats() {
     li.append(ava, meta);
     const un = archived.reduce((s, c) => s + (c.unread || 0), 0);
     if (un) { const b = document.createElement('span'); b.className = 'badge muted'; txt(b, String(un)); li.append(b); }
-    li.onclick = () => { showArchive = true; loadChats(); }; ul.append(li);
+    li.onclick = () => { showArchive = true; renderChats(); loadChats(); }; ul.append(li);
   }
   for (const c of visible) {
     const li = document.createElement('li');
@@ -280,8 +286,10 @@ function beep() { try { const x = new AudioContext(), o = x.createOscillator(), 
 /** Новые сообщения во всех моих чатах (RLS отдаёт только их): обновить список и уведомить. */
 function watchInbox() {
   if (inboxChan) sb.removeChannel(inboxChan);
-  inboxChan = sb.channel('inbox').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, p => { const m = p.new; if (!m || !me || m.sender_id === me.id) return; if (!currentChat || m.chat_id !== currentChat.id) loadChatsSoon(); notifyMsg(m).catch(() => {}); }).subscribe();
+  inboxChan = sb.channel('inbox').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, p => { const m = p.new; if (!m || !me || m.sender_id === me.id) return; if (!currentChat || m.chat_id !== currentChat.id) { loadChatsSoon(); deliverBg(m); } notifyMsg(m).catch(() => {}); }).subscribe();
 }
+/** Входящее в неоткрытый чат: расшифровали — mark_delivered */
+async function deliverBg(m) { try { if (!m.ciphertext) return; const pl = await decryptPayload(m); if (pl && !pl.fail && !pl.other && !pl.pending) { window.cacheMsg?.(m, pl); sendDlv(m); } } catch { /* */ } }
 async function notifyMsg(m) {
   if (!notifOn()) return;
   if (currentChat && currentChat.id === m.chat_id && document.visibilityState === 'visible' && !$('app').classList.contains('in-settings')) return;
@@ -290,12 +298,21 @@ async function notifyMsg(m) {
   beep();
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   let text = 'Новое сообщение';
-  if (m.ciphertext) { const pl = await decryptPayload(m); if (pl && !pl.fail && !pl.other) text = pl.t || (pl.f ? 'Файл' : text); }
+  if (m.ciphertext) { const pl = await decryptPayload(m); if (pl && !pl.fail && !pl.other && !pl.pending) text = notifText(pl); }
   let title = c ? (c.title || c.name || 'Мессенджер') : 'Мессенджер';
   if (c && c.peer) { const p = await getProfile(c.peer); if (p) title = displayName(p); }
-  const n = new Notification(title, { body: text.slice(0, 200), tag: 'chat-' + m.chat_id, renotify: true });
-  n.onclick = () => { window.focus(); const li = document.querySelector(`#chatList li[data-id="${m.chat_id}"]`); if (li) li.click(); n.close(); };
+  const who = m.sender_id ? await nameOf(m.sender_id) : '';
+  const body = (who ? who + ': ' : '') + text; // «Имя: текст» (схема Design Bot)
+  await window.showNotif(title, body.slice(0, 200), { chat_id: m.chat_id, msg_at: m.created_at });
 }
+/** Текст уведомления: голосовое/кружок — по схеме Design Bot */
+function notifText(pl) {
+  const f = pl.f;
+  if (f && f.vk === 'voice') return '🎤 Голосовое сообщение ' + fmtDur(f.d);
+  if (f && f.vk === 'round') return '⭕ Видеосообщение';
+  return pl.t || (f ? (imgMime(f) ? 'Фото' : 'Файл') : 'Новое сообщение');
+}
+const fmtDur = d => { d = Math.max(0, Math.round(+d || 0)); return Math.floor(d / 60) + ':' + String(d % 60).padStart(2, '0'); };
 document.addEventListener('visibilitychange', clearBadge);
 function toastLong(s) { toast(String(s), 4000); }
 function toast(s, ms = 2500) { const t = $('toast'); txt(t, s); t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms); }
@@ -440,7 +457,7 @@ function showIdMismatch(e) {
   const out = async scope => {
     $('idmmGo').disabled = $('idmmAll').disabled = true;
     try { if (E2E && E2E.resetForRelogin) await E2E.resetForRelogin(); } catch (err) { console.warn('resetForRelogin', err); }
-    userSignOut = true; try { await sb.auth.signOut({ scope }); } catch (err) { /* локальную сессию всё равно чистим */ }
+    await window.pushUnregister?.(); userSignOut = true; try { await sb.auth.signOut({ scope }); } catch (err) { /* локальную сессию всё равно чистим */ }
     el.remove();
   };
   $('idmmGo').onclick = () => out('local');
@@ -521,7 +538,10 @@ async function renderMsg(m, d) {
     if (pl && !pl.other && !pl.fail && !pl.pending) {
       notePreview(m, pl);
       b.className = 'body'; txt(b, pl.t); if (!pl.t) b.hidden = true;
-      if (pl.f) {
+      window.cacheMsg?.(m, pl);
+      if (!mine) { sendDlv(m); seenIO.observe(d); }
+      if (pl.f && (pl.f.vk === 'voice' || pl.f.vk === 'round') && window.mediaEl) { d.insertBefore(mediaEl(pl.f, m, !mine), b); d.classList.add(pl.f.vk === 'round' ? 'round-msg' : 'voice-msg'); }
+      else if (pl.f) {
         const fb = fileRow(pl.f, !mine);
         const pv = imagePreview(pl.f, pl.t, !mine, bad => { pv.replaceWith(bad ? brokenRow(pl.f) : fb); d.classList.remove('has-img', 'img-only'); });
         if (pv) { d.insertBefore(pv, b); d.classList.add('has-img'); if (!pl.t) d.classList.add('img-only'); } // подпись под картинкой; скачать — в просмотре
@@ -805,6 +825,7 @@ function paintSub() {
   if (!currentChat) return txt(s, '');
   if (Date.now() < typingUntil) { s.className = 'typing'; txt(s, (currentChat.kind === 'direct' ? '' : (typingWho ? typingWho + ' ' : '')) + 'печатает'); const d = document.createElement('span'); d.className = 'typing-dots'; d.setAttribute('aria-hidden', 'true'); d.append(document.createElement('i'), document.createElement('i'), document.createElement('i')); s.append(d); s.setAttribute('aria-label', s.textContent + '…'); return; }
   s.removeAttribute('aria-label');
+  if (window.connState && window.connState()) { s.className = 'conn'; return txt(s, 'соединение…'); }
   if (currentChat.kind !== 'direct') return txt(s, 'группа');
   if (lastSeen === undefined || peerUnknown) return txt(s, '');
   const t = seenText(lastSeen); if (t === 'в сети') s.className = 'online'; txt(s, t);
@@ -840,6 +861,7 @@ function placeMsg(m, put) {
   const d = document.createElement('div'); d.dataset.id = m.id; msgEls[m.id] = d;
   d.className = 'msg' + (me && m.sender_id === me.id ? ' mine' : ''); d.dataset.at = m.created_at; d.dataset.sender = m.sender_id || '';
   const b = document.createElement('span'); b.className = 'body e2e'; txt(b, m.ciphertext ? 'Расшифровка…' : (m.body || '')); d.append(b);
+  if (m.ciphertext) d.classList.add('skel'); // скелетон до расшифровки
   put(d); return d;
 }
 async function renderSafe(m, d) {
@@ -858,7 +880,7 @@ async function addMsg(m) {
 }
 async function updMsg(m) { const d = msgEls[m.id]; if (d) await renderSafe(m, d); }
 async function openChat(c, li) {
-  currentChat = c; readState = {}; lastMarked = 0; pins = []; pinIdx = 0; jumpUnread = 0; lastSeen = undefined; typingUntil = 0; cancelCompose(); closeMenu();
+  currentChat = c; readState = {}; for (const k in dlvState) delete dlvState[k]; lastMarked = 0; pins = []; pinIdx = 0; jumpUnread = 0; lastSeen = undefined; typingUntil = 0; cancelCompose(); closeMenu();
   for (const k of Object.keys(msgData)) delete msgData[k];
   for (const k of Object.keys(reacts)) delete reacts[k];
   msgData.__openedAt = new Date().toISOString();
@@ -868,7 +890,7 @@ async function openChat(c, li) {
   $('app').classList.add('in-chat'); $('app').classList.remove('in-settings');
   if (location.hash !== '#chat') navPush({ v: 'chat' }, '', '#chat');
   chatHasE2e = false; peerId = c.peer || null; peerUnknown = false;
-  for (const k of Object.keys(msgEls)) delete msgEls[k];
+  for (const k of Object.keys(msgEls)) delete msgEls[k]; onScreen.clear(); seenIO.disconnect();
   txt($('chatTitle'), li.querySelector('.name') ? li.querySelector('.name').textContent : li.textContent);
   $('chatAva').hidden = true;
   for (const k of Object.keys(imgUrls)) { Promise.resolve(imgUrls[k]).then(u => URL.revokeObjectURL(u)).catch(() => {}); delete imgUrls[k]; } // освобождаем blob: прошлого чата
@@ -896,11 +918,17 @@ async function openChat(c, li) {
   if (!c.role) { const { data: r } = await sb.from('chat_members').select('role').eq('chat_id', c.id).eq('user_id', me.id).maybeSingle(); if (r) c.role = r.role; }
   loadPins(); loadLastSeen(); paintSub();
   $('messages').prepend(olderBtn); olderBtn.hidden = true; oldestAt = null;
-  const { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE);
-  if (error) showErr('Не удалось загрузить сообщения: ' + ruErr(error));
+  const cached = window.cachedMsgs ? await window.cachedMsgs(c.id) : [];
   if (currentChat !== c) return;
+  for (const m of cached) if (!msgEls[m.id]) renderSafe(m, placeMsg(m, d => $('messages').appendChild(d)));
+  if (cached.length) $('messages').scrollTop = $('messages').scrollHeight; else window.showSkeletons?.();
+  let { data, error } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(PAGE);
+  window.hideSkeletons?.();
+  if (error) { if (cached.length) { data = null; toast('Нет соединения — показаны сохранённые сообщения'); } else showErr('Не удалось загрузить сообщения: ' + ruErr(error)); }
+  if (currentChat !== c) return;
+  if (error && cached.length) return;
   // Сначала все пузыри сразу (заглушка «Расшифровка…»), потом расшифровка по порядку: зависшее шифрование не прячет сообщения
-  const list = (data || []).reverse(), els = list.map(m => placeMsg(m, d => $('messages').appendChild(d)));
+  const list = (data || []).reverse(), els = list.map(m => { const o = msgEls[m.id]; if (o) { $('messages').appendChild(o); return o; } return placeMsg(m, d => $('messages').appendChild(d)); });
   $('messages').scrollTop = $('messages').scrollHeight;
   (async () => {
     for (let i = 0; i < list.length; i++) { if (currentChat !== c) return; if (msgEls[list[i].id] === els[i]) await renderSafe(list[i], els[i]); }
@@ -944,7 +972,7 @@ function subChat(c, retried = false) {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => onIncoming(p.new))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${c.id}` }, p => updMsg(p.new))
     // Живые отметки прочтения (работает, когда chat_members добавлен в публикацию Realtime; до этого — опрос раз в 8 с)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { readState[p.new.user_id] = p.new.last_read_at; paintAllTicks(); } })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `chat_id=eq.${c.id}` }, p => { if (p.new && p.new.user_id !== me.id) { onReadBc({ u: p.new.user_id, at: p.new.last_read_at }); if (p.new.last_delivered_at) onDlvBc({ u: p.new.user_id, at: p.new.last_delivered_at }); } })
     // DELETE в Realtime не фильтруется по колонкам — приходит только id, сверяем с загруженными
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, p => { if (p.old && p.old.id && msgEls[p.old.id]) { removeMsgEl(p.old.id); loadChatsSoon(); } })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_pins', filter: `chat_id=eq.${c.id}` }, () => loadPins())
@@ -953,6 +981,8 @@ function subChat(c, retried = false) {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, p => { const r = p.new; if (r && msgEls[r.message_id]) addReact(r); })
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, () => reloadReactsSoon())
     .on('broadcast', { event: 'typing' }, p => onTyping(p.payload))
+    .on('broadcast', { event: 'read' }, p => onReadBc(p.payload))
+    .on('broadcast', { event: 'dlv' }, p => onDlvBc(p.payload))
     .subscribe((st, err) => {
       if (st !== 'CHANNEL_ERROR' && st !== 'TIMED_OUT') return;
       console.warn('realtime', st, err);
@@ -975,14 +1005,17 @@ async function loadReadState() {
   const c = currentChat; if (!c) return;
   const { data, error } = await sb.rpc('chat_read_state', { p_chat: c.id });
   if (error || currentChat !== c) return;
-  const st = {}; for (const r of data || []) if (r.user_id !== me.id) st[r.user_id] = r.last_read_at;
+  const st = {}; for (const r of data || []) if (r.user_id !== me.id) { st[r.user_id] = r.last_read_at; if (r.last_delivered_at) onDlvBc({ u: r.user_id, at: r.last_delivered_at }); }
   readState = st; paintAllTicks();
 }
 function isRead(at) {
   const others = Object.values(readState);
   return others.length > 0 && others.every(r => r && new Date(r) >= new Date(at));
 }
+// «доставлено» = chat_members.last_delivered_at собеседника (rpc mark_delivered, Hack Bot 20.10)
+const dlvState = {}; // user_id → время последнего сообщения, которое его клиент получил и расшифровал (broadcast «dlv»)
 function isDelivered(at) {
+  return Object.values(dlvState).some(x => x && new Date(x) >= new Date(at));
   if (!currentChat || currentChat.kind !== 'direct' || !lastSeen) return false;
   if (lastSeen === 'online') return true; if (isNaN(Date.parse(lastSeen))) return false;
   const ls = new Date(lastSeen).getTime(); // собеседник был в сети после сообщения или в сети сейчас (≤2 мин) — доставлено
@@ -992,16 +1025,39 @@ function paintTicks(d) {
   const t = d.querySelector('.ticks'); if (!t) return;
   const st = d.dataset.state;
   const [ic, title, cls] = st === 'sending' ? ['schedule', 'Отправляется', 'sending'] : st === 'failed' ? ['error', 'Не отправлено — нажмите', 'failed']
-    : isRead(d.dataset.at) ? ['done_all', 'Прочитано', 'read'] : isDelivered(d.dataset.at) ? ['done_all', 'Доставлено', 'delivered'] : ['check', 'Отправлено', 'sent'];
+    : isRead(d.dataset.at) ? ['done_all', 'Прочитано', 'read'] : isDelivered(d.dataset.at) ? ['done_all', 'Доставлено', 'delivered'] : ['done', 'Отправлено', 'sent'];
+  if (t.dataset.k === cls && !st) return; t.dataset.k = cls; // без лишних перерисовок — только смена класса (transition 150 мс)
   t.className = 'ticks ms ' + cls; txt(t, ic); t.title = title; t.setAttribute('aria-label', title);
   if (st === 'failed') { t.setAttribute('role', 'button'); t.tabIndex = 0; t.onclick = ev => { ev.stopPropagation(); outMenu(ev, d.dataset.id); }; d.onclick = ev => { if (d.dataset.state === 'failed') { ev.stopPropagation(); outMenu(ev, d.dataset.id); } }; }
   else { t.removeAttribute('role'); t.removeAttribute('tabindex'); t.onclick = null; d.onclick = null; }
+}
+/** Собеседник прочитал (broadcast из приватного канала чата): только участник, время только вперёд */
+function onDlvBc(p) {
+  if (!p || !me || p.u === me.id || typeof p.u !== 'string' || isNaN(Date.parse(p.at))) return;
+  if (new Date(p.at) > new Date(Date.now() + 60000)) return;
+  if (!dlvState[p.u] || new Date(p.at) > new Date(dlvState[p.u])) { dlvState[p.u] = p.at; paintAllTicks(); }
+}
+/** «Получил и расшифровал»: rpc mark_delivered, троттлинг 400 мс на чат, время только растёт */
+const dlvQ = {}, dlvDone = {};
+function sendDlv(m) {
+  if (!me || !m || m.sender_id === me.id || !m.chat_id || !m.created_at) return;
+  const c = m.chat_id; if ((dlvDone[c] || '') >= m.created_at || (dlvQ[c] && dlvQ[c].at >= m.created_at)) return;
+  if (dlvQ[c]) { dlvQ[c].at = m.created_at; return; }
+  dlvQ[c] = { at: m.created_at };
+  setTimeout(async () => { const at = dlvQ[c].at; delete dlvQ[c]; const { error } = await sb.rpc('mark_delivered', { p_chat: c, p_upto: at }); if (!error && at > (dlvDone[c] || '')) dlvDone[c] = at; }, 400);
+}
+function onReadBc(p) {
+  if (!p || !me || p.u === me.id || typeof p.u !== 'string' || isNaN(Date.parse(p.at))) return;
+  if (new Date(p.at) > new Date(Date.now() + 60000)) return; // не верим «прочитанному из будущего»
+  if (!readState[p.u] || new Date(p.at) > new Date(readState[p.u])) { readState[p.u] = p.at; paintAllTicks(); }
 }
 function paintAllTicks() { document.querySelectorAll('#messages .msg.mine').forEach(paintTicks); }
 setInterval(() => { if (currentChat && document.visibilityState === 'visible') loadReadState(); }, 8000);
 
 // mark_read — только когда чат действительно на экране: вкладка видима, окно в фокусе, панель чата показана
 let markT = null, lastMarked = 0;
+const onScreen = new Set();
+const seenIO = new IntersectionObserver(es => { for (const e of es) { if (e.isIntersecting) onScreen.add(e.target); else onScreen.delete(e.target); } maybeMarkRead(); }, { root: document.getElementById('messages'), threshold: 0.6 });
 function chatVisible() {
   if (!currentChat || document.visibilityState !== 'visible' || !document.hasFocus()) return false;
   const p = $('chatPane'); return p.offsetParent !== null && p.getClientRects().length > 0 && !$('app').classList.contains('in-settings');
@@ -1010,15 +1066,15 @@ function maybeMarkRead() {
   clearTimeout(markT);
   markT = setTimeout(async () => {
     if (!chatVisible()) return;
-    const box = $('messages'); if (box.scrollHeight - box.scrollTop - box.clientHeight > 120) return; // пользователь листает историю
-    const newest = [...box.querySelectorAll('.msg:not(.mine)')].pop();
+    // прочитано = пузырь на экране (IntersectionObserver) и вкладка активна; в фоне не синеет
+    const newest = [...onScreen].filter(x => x.isConnected && x.dataset.at).sort((x, y) => x.dataset.at < y.dataset.at ? -1 : 1).pop();
     if (!newest || new Date(newest.dataset.at).getTime() <= lastMarked) return;
     const c = currentChat;
     const upto = newest.dataset.at;
     const { error } = await sb.rpc('mark_read', { p_chat: c.id, p_upto: upto });
     if (error) console.warn('mark_read', error);
-    if (!error && currentChat === c) lastMarked = new Date(newest.dataset.at).getTime();
-  }, 600);
+    if (!error && currentChat === c) { lastMarked = new Date(newest.dataset.at).getTime(); if (chan) chan.send({ type: 'broadcast', event: 'read', payload: { u: me.id, at: upto } }).catch(() => {}); } // галочки у собеседника — сразу (broadcast), не ждём publication chat_members
+  }, 400); // троттлинг 300–500 мс
 }
 document.addEventListener('visibilitychange', maybeMarkRead);
 window.addEventListener('focus', maybeMarkRead);
@@ -1051,7 +1107,7 @@ function outBubble(job) {
     const pv = document.createElement('div'); pv.className = 'img-prev'; const im = document.createElement('img'); im.alt = safeName(job.file.name);
     im.src = job.localUrl = URL.createObjectURL(job.file); pv.append(im); d.append(pv); d.classList.add('has-img'); if (!job.caption) d.classList.add('img-only');
   }
-  const b = document.createElement('span'); b.className = 'body'; txt(b, job.kind === 'text' ? job.text : (job.caption || (d.classList.contains('has-img') ? '' : job.file.name))); if (!b.textContent) b.hidden = true; d.append(b);
+  const b = document.createElement('span'); b.className = 'body'; txt(b, job.kind === 'text' ? job.text : job.media ? (job.media.vk === 'voice' ? '🎤 Голосовое сообщение ' + fmtDur(job.media.d) : '⭕ Видеосообщение') : (job.caption || (d.classList.contains('has-img') ? '' : job.file.name))); if (!b.textContent) b.hidden = true; d.append(b);
   const foot = document.createElement('div'); foot.className = 'foot';
   const tm = document.createElement('time'); txt(tm, fmtTime(d.dataset.at)); const t = document.createElement('span'); t.className = 'ticks';
   foot.append(tm, t); d.append(foot);
@@ -1207,9 +1263,12 @@ async function sendFile(chat, file, extra, caption, fw, job) {
   if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
   const plain = new Uint8Array(await file.arrayBuffer());
   const enc = await E2E.encryptFile(plain);
+  const bucket = job && job.media ? MEDIA_BUCKET : 'chat-files';
   const path = `chat/${chat.id}/${crypto.randomUUID()}_file.bin`;
-  await uploadEnc(path, enc.ct);
+  await uploadEnc(path, enc.ct, bucket);
   const f = { p: path, n: safeName(file.name), s: plain.length, m: file.type || '', k: enc.k, iv: enc.iv, h: enc.h };
+  if (bucket !== 'chat-files') f.b = bucket;
+  if (job && job.media) Object.assign(f, job.media); // vk: voice|round, d: длительность, w: волна — внутри шифротекста
   // подпись — только внутри зашифрованного payload (поле caption), на сервер открытым текстом не уходит
   const pl = { v: 1, t: '', f }; if (caption) pl.caption = String(caption).slice(0, 4000); if (fw) pl.fw = fw;
   if (job) {
@@ -1225,10 +1284,12 @@ async function sendFile(chat, file, extra, caption, fw, job) {
 }
 /** Загрузка шифротекста в Storage: Bearer-токен, без cookies (credentials: 'omit' — иначе CORS с '*' падает), без автоповторов.
  *  Объект уже есть (повтор после потерянного ответа) — считаем загруженным. */
-async function uploadEnc(path, ct) {
+// Голосовые и кружки: пока общий путь вложений. Когда Hack Bot создаст отдельный бакет — поменять только здесь.
+const MEDIA_BUCKET = 'chat-files';
+async function uploadEnc(path, ct, bucket = 'chat-files') {
   const { data } = await sb.auth.getSession(); const tok = data.session && data.session.access_token;
   if (!tok) throw userErr('Нет сеанса — войдите снова.');
-  const r = await fetch(C.SUPABASE_URL + '/storage/v1/object/chat-files/' + path.split('/').map(encodeURIComponent).join('/'), {
+  const r = await fetch(C.SUPABASE_URL + '/storage/v1/object/' + bucket + '/' + path.split('/').map(encodeURIComponent).join('/'), {
     method: 'POST', credentials: 'omit', cache: 'no-store',
     headers: { Authorization: 'Bearer ' + tok, apikey: C.SUPABASE_KEY, 'Content-Type': 'application/octet-stream', 'x-upsert': 'false' },
     body: new Blob([ct], { type: 'application/octet-stream' })
@@ -1239,7 +1300,7 @@ async function uploadEnc(path, ct) {
   throw userErr('Файл не загружен: ' + ((j && (j.message || j.error)) || ('HTTP ' + r.status)));
 }
 async function fetchFilePlain(f) {
-  const { data, error } = await sb.storage.from('chat-files').createSignedUrl(f.p, 60);
+  const { data, error } = await sb.storage.from(/^[a-z0-9-]{3,63}$/.test(f.b || '') ? f.b : 'chat-files').createSignedUrl(f.p, 60);
   if (error) throw error;
   const r = await fetch(data.signedUrl);
   if (!r.ok) throw userErr('Скачивание не удалось');
@@ -1328,6 +1389,8 @@ function msIcon(name, cls) { const i = document.createElement('span'); i.classNa
 const lastPrev = {}; // chat_id + last_at → {icon, text}
 /** Текст превью в списке чатов по расшифрованному payload: фото → значок image + подпись, файл → description + имя, текст. */
 function prevOf(pl) {
+  if (pl.f && pl.f.vk === 'voice') return { icon: 'mic', text: 'Голосовое сообщение ' + fmtDur(pl.f.d) };
+  if (pl.f && pl.f.vk === 'round') return { icon: 'radio_button_unchecked', text: 'Видеосообщение' };
   if (!pl.f) return { icon: null, text: pl.t || '' };
   const cap = pl.caption || pl.t || '';
   return imgMime(pl.f) ? { icon: 'image', text: cap || 'Фото' } : { icon: 'description', text: cap || safeName(pl.f.n) };
@@ -1349,6 +1412,7 @@ async function filePreviewSoon(c, sub) {
     const { data } = await sb.from('messages').select('*').eq('chat_id', c.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (!data || !data.ciphertext) return;
     const pl = await decryptPayload(data); if (!pl || pl.fail || pl.other) return;
+    if (!pl.pending) sendDlv(data);
     if (pl.pending) { setTimeout(() => { if (sub.isConnected && me) filePreviewSoon(c, sub); }, 16000); return; } // шифрование занято — повторим
     paint(lastPrev[key] = prevOf(pl));
   } catch (e) { /* остаётся «Файл» */ }
@@ -1781,21 +1845,24 @@ async function squareImage(file, size) {
 
 // ---------- состояние ----------
 let lastUid;
+const domReady = new Promise(r => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', r, { once: true }) : r()); // media.js (кэш) загружен
 async function onSession(session) {
+  await domReady;
   const uid = session ? session.user.id : null;
   if (lastUid !== undefined && uid === lastUid) { me = session ? session.user : null; return; }
   lastUid = uid;
   me = session ? session.user : null;
   $('auth').hidden = !!me; $('app').hidden = !me;
   { const pw = $('password'); if (pw) pw.value = ''; }
-  if (!me) { $('app').classList.remove('in-settings', 'in-chat'); currentChat = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); } // пароль не остаётся в поле ни после входа, ни после выхода
+  if (!me) { window.clearLocalCache?.(); $('app').classList.remove('in-settings', 'in-chat'); currentChat = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); } // пароль не остаётся в поле ни после входа, ни после выхода
   if (me) {
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
     { const m = /^#(profile|settings)$/.exec(location.hash); if (m) openSettings(false, m[1]); else setNav('chats'); }
     e2eStart().then(ok => { deviceCheck(true); if (ok && E2E.isFreshDevice && E2E.isFreshDevice()) offerRestore(); });
     paintBackupRow();
-    loadChats();
+    Promise.resolve(window.chatsFromCache?.()).finally(() => loadChats());
+    window.pushSubscribe?.();
   } else { currentChat = null; $('app').classList.remove('in-chat', 'in-settings'); qrFails = 0; startQr(); }
 }
 // Один общий перезапуск Realtime на все каналы; сессия отозвана — выходим, без переподключений по кругу
