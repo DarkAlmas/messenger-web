@@ -2118,6 +2118,8 @@ async function createBackup(pass, progress) {
   const key = await Backup.deriveKey(pass, salt, kdf);
   const bin = await Backup.seal({ v: 1, uid: me.id, created_at: new Date().toISOString(), messages }, key, me.id);
   if (bin.length > 104857600) throw userErr('Копия больше 100 МБ');
+  // одна копия на аккаунт: не затираем молча более полную (например, с другого устройства)
+  if (row && row.size_bytes && bin.length < row.size_bytes * 0.8 && !(await askConfirm(`Новая копия (${fmtSize(bin.length)}) меньше прежней (${fmtSize(row.size_bytes)}). Возможно, на этом устройстве нет части переписки. Сначала лучше восстановить прежнюю копию. Всё равно заменить?`, 'Заменить'))) throw userErr('Отменено');
   progress('Загружаем…');
   const path = me.id + '/backup.bin';
   const { error } = await sb.storage.from('backups').upload(path, new Blob([bin], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: true });
