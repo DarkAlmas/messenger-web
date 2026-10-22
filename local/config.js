@@ -1,3 +1,20 @@
+
+// ngrok (бесплатный) отдаёт браузеру страницу-предупреждение; этот заголовок её пропускает.
+(function () {
+  if (typeof window === 'undefined' || !window.fetch || window.__ngrokPatched) return; window.__ngrokPatched = true;
+  const of = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || String(input);
+      const h = new URL(url, location.href).hostname;
+      if (/(^|\.)ngrok(-free)?\.(app|dev)$/.test(h)) {
+        init = Object.assign({}, init || {}); const hd = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+        hd.set('ngrok-skip-browser-warning', '1'); init.headers = hd;
+      }
+    } catch (e) {}
+    return of(input, init);
+  };
+})();
 /* Messenger Local: адрес сервера и anon-ключ берутся во время работы, а не из сборки.
    Порядок: 1) ручной адрес («Настройки сервера» на экране входа) → 2) последний проверенный подписанный server.json
    → 3) нет сервера (показываем просьбу указать сервер). Зеркалит Android «Messenger Local». */
@@ -5,7 +22,7 @@
   'use strict';
   // ==== Константы (менять здесь) ====
   const CONFIG_URL = 'https://darkalmas.github.io/messenger-web/local/server.json'; // TODO: адрес server.json на GitHub Pages, напр. 'https://<user>.github.io/<repo>/server.json'
-  const ALLOWED_HOST_SUFFIXES = ['trycloudflare.com', 'ngrok-free.app', 'ngrok.app', 'pinggy.link', 'lhr.life']; // хост == суффикс или оканчивается на '.'+суффикс; домен Димы — дописать сюда
+  const ALLOWED_HOST_SUFFIXES = ['trycloudflare.com', 'ngrok-free.app', 'ngrok.app', 'ngrok-free.dev', 'pinggy.link', 'lhr.life']; // хост == суффикс или оканчивается на '.'+суффикс; домен Димы — дописать сюда
   const SERVER_PUBKEY_B64 = 'eRAw43bRwUGqt7DmZQUkZkajEKuXtzXT3zj8SDf2W8s='; // Ed25519 raw 32 байта
   const MAX_FUTURE_SEC = 600;
   const LS = { manual: 'msgr-local-manual', good: 'msgr-local-good', lastIssued: 'msgr-local-issued', changed: 'msgr-local-changed', active: 'msgr-local-active' };
@@ -85,7 +102,7 @@
     } catch (e) { console.warn('server.json rejected:', e && e.message); }
   }
   function setManual(url, key) {
-    const u = allowedUrl(url); if (!u) throw new Error('Разрешены только https-адреса туннеля (trycloudflare, ngrok, pinggy, lhr.life) без логина и порта');
+    const u = allowedUrl(url); if (!u) throw new Error('Разрешены только https-адреса туннеля (trycloudflare, ngrok, ngrok-free.dev, pinggy, lhr.life) без логина и порта');
     if (!anonKeyOk(key)) throw new Error('Нужен anon-ключ (service_role не принимается)');
     localStorage.setItem(LS.manual, JSON.stringify({ server_url: u, anon_key: key }));
     switchTo({ server_url: u, anon_key: key }); location.reload();
