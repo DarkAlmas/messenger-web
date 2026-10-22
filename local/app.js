@@ -196,6 +196,7 @@ function qrState(kind, status, timer) {
   $('qrRetry').hidden = kind !== 'error';
 }
 function qrFail(e) {
+  if (window.LOCAL_SERVER_UP === false || (e && !e.status)) return qrOffline();
   stopQr();
   qrFails++;
   const MAX = 5;
@@ -212,9 +213,13 @@ function qrFail(e) {
   qrRetryTimer = setTimeout(startQr, wait);
 }
 $('qrRetry').onclick = () => { qrFails = 0; startQr(); };
+function qrOffline() { stopQr(); const box = $('qr'); box.classList.add('empty', 'qr-off'); box.innerHTML = ''; const s = document.createElement('span'); s.className = 'qr-off-txt'; txt(s, 'QR появится, когда сервер будет доступен'); box.appendChild(s); txt($('qrStatus'), ''); txt($('qrTimerText'), ''); $('qrRetry').hidden = true; }
+window.addEventListener('local-server', e => { if (me) return; if (e.detail.up) { qrFails = 0; if ($('qr').classList.contains('qr-off') || !qrTimer) startQr(); } else qrOffline(); });
 async function startQr() {
   stopQr();
   if (me) return;
+  if (window.LOCAL_SERVER_UP === false) return qrOffline();
+  $('qr').classList.remove('qr-off');
   const gen = ++qrGen;
   qrState('loading', 'Получаем QR…');
   let q;
