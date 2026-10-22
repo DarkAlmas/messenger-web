@@ -1,5 +1,5 @@
 /* Service worker: офлайн-оболочка сайта (network-first), уведомления, Web Push. */
-const VER = '20261021a'; // меняется с каждой правкой sw.js → браузер ставит новый SW
+const VER = '20261022a'; // меняется с каждой правкой sw.js → браузер ставит новый SW
 const CACHE = 'msgr-shell-' + VER;
 // Установка: кладём в кэш ВСЮ оболочку (index + все скрипты/стили из него + модули E2E + CDN), иначе первая офлайн-перезагрузка не грузит app.js и др.
 const EXTRA = ['./', 'index.html', 'e2e.js?v=20261020h', 'vendor/sigwasm/sigwasm.js?v=20261014k', 'vendor/sigwasm/sigwasm_bg.wasm?v=20261014k', 'fonts/material-symbols-rounded.woff2?v=9'];
@@ -19,6 +19,7 @@ self.addEventListener('fetch', e => {
   const u = new URL(r.url);
   const own = u.origin === self.location.origin, cdn = u.host === 'cdn.jsdelivr.net';
   if (!own && !cdn) return; // API Supabase не кэшируем
+  if (own && u.pathname.startsWith(new URL('local/', self.registration.scope).pathname)) return; // копия Messenger Local — своя область и свой SW
   // свои файлы — всегда с сервера с проверкой (no-cache: HTTP-кэш GitHub Pages 10 мин не отдаёт старую сборку), без сети — из кэша
   e.respondWith((own ? (r.mode === 'navigate' ? fetch(r.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(r, { cache: 'no-cache' })) : fetch(r)).then(res => { if ((res.ok && (res.type === 'basic' || res.type === 'cors')) || (cdn && res.type === 'opaque')) { const c = res.clone(); caches.open(CACHE).then(x => x.put(r, c)); } return res; })
     .catch(() => caches.match(r).then(m => m || caches.match(r, { ignoreSearch: true })).then(m => m || (r.mode === 'navigate' ? caches.match('./', { ignoreSearch: true }) : Response.error()))));

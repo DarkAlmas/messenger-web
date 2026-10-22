@@ -1,0 +1,135 @@
+/* Messenger — дизайн-токены сайта. Источник значений: см. README.md (app = из Android-приложения, tg = Telegram-подобное значение) */
+:root, [data-theme="light"] {
+  color-scheme: light;
+  /* Бренд (app: res/values/themes.xml) */
+  --color-primary: #3D5AFE;
+  --color-on-primary: #FFFFFF;
+  --color-primary-container: #DEE0FF;
+  --color-on-primary-container: #00105C;
+  --color-secondary: #5B5D72;
+  --color-secondary-container: #E0E1F9;
+  /* Поверхности (app) */
+  --color-surface: #FBF8FF;
+  --color-surface-lowest: #FFFFFF;
+  --color-surface-container: #F0EDF7;
+  --color-surface-high: #EAE7F1;
+  --color-surface-highest: #E4E1EC;
+  /* Текст (Material3 defaults для светлой схемы — tg/M3) */
+  --color-text: #1B1B21;
+  --color-text-secondary: #5D5E72;
+  --color-gray: #8E8E93;            /* app: Ui.gray() */
+  --color-divider: rgba(0,0,0,.08);
+  /* Фон чата (tg) */
+  --color-chat-bg: #E9E6F4;
+  /* Пузыри (app: Ui.bubble — mine=colorPrimary, чужие=colorSurfaceContainerHigh) */
+  --bubble-out-bg: var(--color-primary);
+  --bubble-out-text: var(--color-on-primary);
+  --bubble-out-meta: rgba(255,255,255,.7);  /* app: время alpha 0.7 */
+  --bubble-in-bg: var(--color-surface-lowest); /* tg: белый на фоне чата; app использует surface-high */
+  --bubble-in-text: var(--color-text);
+  --bubble-in-meta: var(--color-gray);
+  /* Состояния */
+  --color-link: var(--color-primary);
+  --color-unread-badge: var(--color-primary);   /* app: бейдж = colorPrimary */
+  --color-muted-badge: #A8A9B4;                 /* tg */
+  --color-online: #4FAE4E;                      /* tg */
+  --color-typing: var(--color-primary);         /* tg */
+  --color-danger: #E53935;                      /* tg */
+  --color-warning: #E8A100;                     /* «⚠ не зашифровано» */
+  --color-pinned-bg: var(--color-surface-container);
+  --color-hover: rgba(61,90,254,.06);
+  --color-active-row: var(--color-primary);     /* tg: выбранный чат */
+  /* Аватарные цвета (app: Ui.AVATAR) */
+  --avatar-1:#5C6BC0; --avatar-2:#26A69A; --avatar-3:#EF6C00; --avatar-4:#AB47BC;
+  --avatar-5:#42A5F5; --avatar-6:#EC407A; --avatar-7:#7CB342; --avatar-8:#8D6E63;
+
+  /* Шрифты: app — системный Roboto (Typeface.DEFAULT) */
+  --font-family: Roboto, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+  --fs-title: 17px;      /* app: имя чата 17sp bold */
+  --fs-message: 16px;    /* app: текст пузыря 16sp, поле ввода 16 */
+  --fs-preview: 14px;    /* app: превью 14sp */
+  --fs-sender: 13px;     /* app: имя отправителя в группе 13 bold */
+  --fs-meta: 12px;       /* app: время в списке, бейдж 12 */
+  --fs-bubble-time: 11px;/* app: время в пузыре 11 */
+  --fs-header: 20px;     /* app: заголовок профиля 20 */
+  --line-height: 1.35;
+
+  /* Отступы (app: Ui.java, dp → px 1:1) */
+  --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 8px;
+  --space-5: 10px; --space-6: 12px; --space-7: 14px; --space-8: 16px; --space-9: 24px;
+  --chat-row-padding: 10px 16px;     /* app */
+  --chat-row-min-height: 72px;       /* app */
+  --bubble-padding: 8px 14px 6px;    /* app */
+  --bubble-side-gap: 56px;           /* app: отступ от противоположного края */
+  --bubble-min-width: 64px;          /* app */
+  --header-height: 56px;             /* tg/M3 */
+  --bottom-bar-height: 56px;         /* tg */
+
+  /* Радиусы (app) */
+  --radius-bubble: 18px;
+  --radius-bubble-tail: 4px;
+  --radius-field: 14px;
+  --radius-pill: 24px;
+  --radius-button: 26px;
+  --radius-badge: 11px;
+  --radius-menu: 12px;   /* tg */
+  /* Тени (tg) */
+  --shadow-bubble: 0 1px 1px rgba(0,0,0,.08);
+  --shadow-menu: 0 4px 24px rgba(0,0,0,.16);
+  --shadow-bar: 0 -1px 0 var(--color-divider);
+  /* Аватары */
+  --avatar-list: 52px;   /* app */
+  --avatar-header: 40px; /* tg */
+  --avatar-profile: 112px;/* tg */
+  --badge-height: 22px;  /* app */
+  /* Анимация */
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --dur: 160ms;
+}
+
+/* Тёмная тема (app: res/values-night/themes.xml) */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-primary: #7B8BFF;
+  --color-on-primary: #FFFFFF;
+  --color-primary-container: #3346D3;
+  --color-on-primary-container: #E3E6FF;
+  --color-secondary: #C4C5DD;
+  --color-secondary-container: #434659;
+  --color-surface: #0F1117;
+  --color-surface-lowest: #0A0C10;
+  --color-surface-container: #171A22;
+  --color-surface-high: #21252F;
+  --color-surface-highest: #2B303B;
+  --color-text: #E4E1EC;
+  --color-text-secondary: #A3A5B8;
+  --color-divider: rgba(255,255,255,.07);
+  --color-chat-bg: #0A0C10;
+  --bubble-out-bg: #3346D3;          /* app primaryContainer: контраст белого текста лучше, чем на #7B8BFF */
+  --bubble-in-bg: var(--color-surface-high); /* app */
+  --bubble-in-meta: #8A8DA0;
+  --color-muted-badge: #4A4E5C;
+  --color-online: #5CC85A;
+  --color-hover: rgba(123,139,255,.08);
+  --color-active-row: #3346D3;
+  --shadow-bubble: none;
+  --shadow-menu: 0 4px 24px rgba(0,0,0,.5);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-primary: #7B8BFF; --color-on-primary: #FFFFFF;
+    --color-primary-container: #3346D3; --color-on-primary-container: #E3E6FF;
+    --color-secondary: #C4C5DD; --color-secondary-container: #434659;
+    --color-surface: #0F1117; --color-surface-lowest: #0A0C10; --color-surface-container: #171A22;
+    --color-surface-high: #21252F; --color-surface-highest: #2B303B;
+    --color-text: #E4E1EC; --color-text-secondary: #A3A5B8; --color-divider: rgba(255,255,255,.07);
+    --color-chat-bg: #0A0C10; --bubble-out-bg: #3346D3; --bubble-in-bg: var(--color-surface-high);
+    --bubble-in-meta: #8A8DA0; --color-muted-badge: #4A4E5C; --color-online: #5CC85A;
+    --color-hover: rgba(123,139,255,.08); --color-active-row: #3346D3;
+    --shadow-bubble: none; --shadow-menu: 0 4px 24px rgba(0,0,0,.5);
+  }
+}
