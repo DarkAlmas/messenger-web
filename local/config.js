@@ -5,7 +5,7 @@
   'use strict';
   // ==== Константы (менять здесь) ====
   const CONFIG_URL = 'https://darkalmas.github.io/messenger-web/local/server.json'; // TODO: адрес server.json на GitHub Pages, напр. 'https://<user>.github.io/<repo>/server.json'
-  const ALLOWED_HOST_SUFFIXES = ['trycloudflare.com']; // хост == суффикс или оканчивается на '.'+суффикс; домен Димы — дописать сюда
+  const ALLOWED_HOST_SUFFIXES = ['trycloudflare.com', 'ngrok-free.app', 'ngrok.app', 'pinggy.link', 'lhr.life']; // хост == суффикс или оканчивается на '.'+суффикс; домен Димы — дописать сюда
   const SERVER_PUBKEY_B64 = 'eRAw43bRwUGqt7DmZQUkZkajEKuXtzXT3zj8SDf2W8s='; // Ed25519 raw 32 байта
   const MAX_FUTURE_SEC = 600;
   const LS = { manual: 'msgr-local-manual', good: 'msgr-local-good', lastIssued: 'msgr-local-issued', changed: 'msgr-local-changed', active: 'msgr-local-active' };
@@ -85,7 +85,7 @@
     } catch (e) { console.warn('server.json rejected:', e && e.message); }
   }
   function setManual(url, key) {
-    const u = allowedUrl(url); if (!u) throw new Error('Разрешены только https://…trycloudflare.com без логина и порта');
+    const u = allowedUrl(url); if (!u) throw new Error('Разрешены только https-адреса туннеля (trycloudflare, ngrok, pinggy, lhr.life) без логина и порта');
     if (!anonKeyOk(key)) throw new Error('Нужен anon-ключ (service_role не принимается)');
     localStorage.setItem(LS.manual, JSON.stringify({ server_url: u, anon_key: key }));
     switchTo({ server_url: u, anon_key: key }); location.reload();
