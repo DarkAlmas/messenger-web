@@ -400,6 +400,42 @@ function mediaUrl(f) { if (f.local) return Promise.resolve(f.local); /* своё
 const heardKey = id => 'local-msgr-heard:' + id;
 const isHeard = id => { try { return !!localStorage.getItem(heardKey(id)); } catch { return false; } };
 let playing = null;
+// ---------- потоковое воспроизведение MLC1 (MEDIA_FORMAT.md): Range по блокам 65552 байт → расшифровка → MediaSource ----------
+// Возвращает объект потока или null (не MLC1 / нет MediaSource / кодек не поддержан) — тогда прежний путь: скачать целиком.
+const b64u8 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const MSE_TYPES = { webm: ['video/webm; codecs="vp8, opus"', 'video/webm; codecs="vp9, opus"', 'video/webm; codecs="vp8"', 'video/webm; codecs="vp9"', 'video/webm; codecs="avc1.42E01E, opus"'],
+  mp4: ['video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 'video/mp4; codecs="avc1.4D401E, mp4a.40.2"', 'video/mp4; codecs="avc1.64001F, mp4a.40.2"', 'video/mp4; codecs="avc1.42E01E"'] };
+async function streamMLC1(f, v, on) {
+  const MS = window.MediaSource || window.ManagedMediaSource, M = window.MLC1;
+  if (!MS || !M || f.local || !f.k || !window.mediaSignedUrl || !(+f.s >= 0)) return null;
+  const url = await window.mediaSignedUrl(f);
+  const n = Math.floor(+f.s / M.CS) + 1, total = M.HDR + n * M.TAG + (+f.s); // размер шифротекста — из размера открытого текста (Content-Range по CORS может быть скрыт)
+  const get = async (a, b) => { const r = await fetch(url, { headers: { Range: `bytes=${a}-${b}` } }); if (r.status !== 206) { const e = new Error('no-range'); e.status = r.status; throw e; } return new Uint8Array(await r.arrayBuffer()); };
+  let first; try { first = await get(0, Math.min(total, M.HDR + M.ECS) - 1); } catch (e) { return null; }
+  if (!M.isMLC1(first)) return null;
+  const hdr = M.parseHeader(first.subarray(0, M.HDR)), key = await M.importKey(b64u8(f.k));
+  const c0 = await M.decryptChunk(key, hdr, 0, n === 1, first.subarray(M.HDR));
+  const kind = c0[0] === 0x1a && c0[1] === 0x45 ? 'webm' : (c0[4] === 0x66 && c0[5] === 0x74 ? 'mp4' : null);
+  const type = kind && MSE_TYPES[kind].find(t => MS.isTypeSupported(t)); if (!type) return null;
+  const ms = new MS(), st = { stopped: false, done: false, stop() { st.stopped = true; } };
+  v.disableRemotePlayback = true; v.src = URL.createObjectURL(ms);
+  await new Promise((res, rej) => { ms.addEventListener('sourceopen', res, { once: true }); setTimeout(() => rej(new Error('sourceopen timeout')), 8000); });
+  const sbuf = ms.addSourceBuffer(type); if (kind === 'webm') try { sbuf.mode = 'sequence'; } catch { /* */ }
+  const append = d => new Promise((res, rej) => { sbuf.addEventListener('updateend', res, { once: true }); sbuf.addEventListener('error', rej, { once: true }); sbuf.appendBuffer(d); });
+  (async () => {
+    try {
+      await append(c0); on.progress && on.progress();
+      for (let i = 1; i < n && !st.stopped; i += 4) { // по 4 блока (~256 КБ) за запрос, расшифровка строго по порядку; ошибка тега → стоп, без пропусков
+        const j = Math.min(n, i + 4), a = M.HDR + i * M.ECS, raw = await get(a, Math.min(total, M.HDR + j * M.ECS) - 1);
+        for (let x = i; x < j && !st.stopped; x++) { const o = (x - i) * M.ECS; const pt = await M.decryptChunk(key, hdr, x, x === n - 1, raw.subarray(o, Math.min(raw.length, o + M.ECS))); if (pt.length) await append(pt); }
+        on.progress && on.progress();
+      }
+      if (!st.stopped) { st.done = true; if (ms.readyState === 'open') ms.endOfStream(); on.progress && on.progress(); }
+    } catch (e) { st.stopped = true; try { if (ms.readyState === 'open') ms.endOfStream('decode'); } catch { /* */ } on.fail && on.fail(e); }
+  })();
+  return st;
+}
+window.streamMLC1 = streamMLC1;
 window.mediaEl = (f, m, fromOther) => {
   if (f.vk === 'round') {
     // круг ровно 200px; пока нет первого кадра — серый круг с ▶ (не чёрный); подпись состояния — ПОД кругом, серая, в одну строку
@@ -425,35 +461,43 @@ window.mediaEl = (f, m, fromOther) => {
     let srcs = null, si = 0, started = false;
     // источники: тип по сигнатуре, затем запасные (mp4 / webm / matroska / без типа) — один и тот же расшифрованный Blob
     v.addEventListener('error', () => { if (srcs && ++si < srcs.length) { v.src = srcs[si]; v.load(); v.play().catch(() => {}); } else bad('Видео повреждено'); });
-    const start = () => { if (started) return; started = true; mediaSrcs(f).then(list => { srcs = list; si = 0; v.src = list[0]; v.load(); })
-      .catch(e => { started = false; bad(e && e.corrupt ? 'Видео повреждено' : 'Не загрузилось — нажмите, чтобы повторить'); }); };
+    let stream = null; const onBuf = () => { try { paint(); } catch { /* до объявления */ } };
+    const full = () => mediaSrcs(f).then(list => { srcs = list; si = 0; v.src = list[0]; v.load(); });
+    const start = () => { if (started) return; started = true;
+      streamMLC1(f, v, { progress: onBuf, fail: e => { v.pause(); bad(e && e.corrupt ? 'Видео повреждено' : 'Не загрузилось'); } })
+        .catch(() => null).then(st => { stream = st; if (!st) return full(); })
+        .catch(e => { started = false; bad(e && e.corrupt ? 'Видео повреждено' : 'Не загрузилось — нажмите, чтобы повторить'); }); };
     start();
     // 23.10 (как Android v8 / Telegram): дуга прогресса по краю (12 часов, по часовой), перемотка перетаскиванием дуги (±24px),
     // касание внутри круга (включая ▶ — это просто картинка) — пауза/пуск; касание дуги только перематывает.
     const NS = 'http://www.w3.org/2000/svg', R = 98, C = 2 * Math.PI * R;
     const ring = document.createElementNS(NS, 'svg'); ring.setAttribute('class', 'round-ring'); ring.setAttribute('viewBox', '0 0 200 200'); ring.setAttribute('aria-hidden', 'true');
     const mk = cls => { const c = document.createElementNS(NS, 'circle'); c.setAttribute('cx', '100'); c.setAttribute('cy', '100'); c.setAttribute('r', String(R)); c.setAttribute('class', cls); ring.append(c); return c; };
-    const trk = mk('rr-track'), arc = mk('rr-arc'), load = mk('rr-load');
+    const trk = mk('rr-track'), bufc = mk('rr-buf'), arc = mk('rr-arc'), load = mk('rr-load');
+    bufc.style.strokeDasharray = C + ' ' + C; bufc.style.strokeDashoffset = String(C);
+    const stall = document.createElement('span'); stall.className = 'round-stall'; stall.hidden = true;
+    const bufEnd = () => { try { const b = v.buffered; return b.length ? b.end(b.length - 1) : 0; } catch { return 0; } };
     arc.style.strokeDasharray = C + ' ' + C; arc.style.strokeDashoffset = String(C); load.style.strokeDasharray = (C * 0.25) + ' ' + C;
     const dot = document.createElement('span'); dot.className = 'round-dot'; dot.hidden = true;
     const hit = document.createElement('div'); hit.className = 'round-hit';
     const stage = document.createElement('div'); stage.className = 'round-stage';
-    wrap.replaceChild(stage, box); stage.append(box, ring, dot, hit); void trk;
+    wrap.replaceChild(stage, box); stage.append(box, ring, dot, stall, hit); void trk;
     let active = false, drag = null, everPlayed = false;
     v.addEventListener('playing', () => { if (active && !everPlayed) { everPlayed = true; grow(true); syncUi(); } });
     if ('IntersectionObserver' in window) new IntersectionObserver(es => { for (const e of es) if (!e.isIntersecting && stage.classList.contains('big')) grow(false); }).observe(stage);
     const dur = () => (isFinite(v.duration) && v.duration > 0) ? v.duration : (+f.d || 0);
     const paint = () => { const d = dur(), fr = active && d ? Math.max(0, Math.min(1, v.currentTime / d)) : 0;
-      arc.style.strokeDashoffset = String(C * (1 - fr)); const a = fr * 2 * Math.PI;
+      arc.style.strokeDashoffset = String(C * (1 - fr)); { const bf = (stream && !stream.done) && d ? Math.max(fr, Math.min(1, bufEnd() / d)) : (active && d ? 1 : 0); bufc.style.strokeDashoffset = String(C * (1 - bf)); } const a = fr * 2 * Math.PI;
       dot.style.left = (50 + R / 2 * Math.sin(a)) + '%'; dot.style.top = (50 - R / 2 * Math.cos(a)) + '%';
       if (drag) txt(t, fmtDur(v.currentTime)); else if (active) txt(t, fmtDur(Math.max(0, d - v.currentTime))); else txt(t, fmtDur(f.d || d)); };
     const grow = on => { stage.classList.toggle('big', on); stage.style.setProperty('--rs', on ? Math.min(innerWidth - 32, 320) + 'px' : ''); };
     const syncUi = () => { stage.classList.toggle('active', active); stage.classList.toggle('played', active && everPlayed); box.classList.toggle('playing', active && !v.paused); stage.classList.toggle('loading', box.classList.contains('wait') && !box.classList.contains('broken')); paint(); };
-    v.addEventListener('timeupdate', paint); v.addEventListener('play', syncUi); v.addEventListener('pause', syncUi);
+    v.addEventListener('timeupdate', paint); v.addEventListener('progress', paint);
+    v.addEventListener('waiting', () => { if (active) stall.hidden = false; }); for (const e of ['playing', 'pause', 'ended']) v.addEventListener(e, () => { stall.hidden = true; }); v.addEventListener('seeked', () => { if (v.readyState >= 3) stall.hidden = true; });
     new MutationObserver(syncUi).observe(box, { attributes: true, attributeFilter: ['class'] });
     const geo = ev => { const r = hit.getBoundingClientRect(), x = ev.clientX - (r.left + r.width / 2), y = ev.clientY - (r.top + r.height / 2);
       const k = 200 / box.getBoundingClientRect().width || 1; return { d: Math.hypot(x, y) * k, ang: (Math.atan2(x, -y) + 2 * Math.PI) % (2 * Math.PI) }; };
-    const seekTo = ang => { const d = dur(); if (!d) return; try { v.currentTime = Math.min(d - 0.05, ang / (2 * Math.PI) * d); } catch { /* */ } paint(); };
+    const seekTo = ang => { const d = dur(); if (!d) return; let tt = Math.min(d - 0.05, ang / (2 * Math.PI) * d); if (stream && !stream.done) tt = Math.min(tt, Math.max(0, bufEnd() - 0.1)); /* только в скачанном */ try { v.currentTime = tt; } catch { /* */ } paint(); };
     const toggle = () => {
       if (box.classList.contains('broken') && !started) { box.classList.remove('broken'); cap.hidden = true; return start(); }
       if (box.classList.contains('broken') || !v.src) return;

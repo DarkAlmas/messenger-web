@@ -622,13 +622,15 @@ async function acceptPendingInner(user) {
 const b64e = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
 const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
-export async function encryptFile(plain) {
+export async function encryptFile(plain, opt) {
   const key = crypto.getRandomValues(new Uint8Array(32)), iv = crypto.getRandomValues(new Uint8Array(12));
+  if (opt && opt.mlc1 && self.MLC1) { const ct = await self.MLC1.encrypt(key, plain); return { ct, k: b64e(key), iv: b64e(iv), h: hex(await crypto.subtle.digest('SHA-256', plain)), fmt: 'mlc1' }; } // MEDIA_FORMAT.md
   const k = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt']);
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, k, plain));
   return { ct, k: b64e(key), iv: b64e(iv), h: hex(await crypto.subtle.digest('SHA-256', plain)) };
 }
 export async function decryptFile(ct, kB64, ivB64, h) {
+  if (self.MLC1 && self.MLC1.isMLC1(ct)) { const p = await self.MLC1.decrypt(b64d(kB64), ct); if (h && hex(await crypto.subtle.digest('SHA-256', p)) !== h) { const e = new Error('Файл повреждён'); e.userMsg = 'Файл повреждён'; e.corrupt = true; throw e; } return p; }
   const k = await crypto.subtle.importKey('raw', b64d(kB64), 'AES-GCM', false, ['decrypt']);
   const p = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(ivB64), tagLength: 128 }, k, ct));
   if (h && hex(await crypto.subtle.digest('SHA-256', p)) !== h) { const e = new Error('Файл повреждён'); e.userMsg = 'Файл повреждён'; e.corrupt = true; throw e; }

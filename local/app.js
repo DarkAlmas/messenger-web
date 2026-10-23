@@ -509,7 +509,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261020h').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261023local10').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1407,7 +1407,7 @@ async function sendFile(chat, file, extra, caption, fw, job) {
   const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
   if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
   const plain = new Uint8Array(await file.arrayBuffer());
-  const enc = await E2E.encryptFile(plain);
+  const enc = await E2E.encryptFile(plain, { mlc1: !!(job && job.media) }); // голосовые/кружки — MLC1 (потоково, MEDIA_FORMAT.md)
   const bucket = job && job.media ? MEDIA_BUCKET : 'chat-files';
   const path = `chat/${chat.id}/${crypto.randomUUID()}_file.bin`;
   await uploadEnc(path, enc.ct, bucket);
@@ -1446,6 +1446,8 @@ async function uploadEnc(path, ct, bucket = 'chat-files') {
   if (r.status === 409 || /duplicate|already exists/i.test((j && (j.error || j.message)) || '')) return;
   throw userErr('Файл не загружен: ' + ((j && (j.message || j.error)) || ('HTTP ' + r.status)));
 }
+/** подписанная ссылка на зашифрованный файл — для потокового MLC1 (media.js), ключ остаётся в браузере */
+window.mediaSignedUrl = async f => { const { data, error } = await sb.storage.from(/^[a-z0-9-]{3,63}$/.test(f.b || '') ? f.b : 'chat-files').createSignedUrl(f.p, 600); if (error) throw error; return data.signedUrl; };
 async function fetchFilePlain(f) {
   const { data, error } = await sb.storage.from(/^[a-z0-9-]{3,63}$/.test(f.b || '') ? f.b : 'chat-files').createSignedUrl(f.p, 60);
   if (error) throw error;
