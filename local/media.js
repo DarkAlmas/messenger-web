@@ -439,13 +439,16 @@ window.mediaEl = (f, m, fromOther) => {
     const hit = document.createElement('div'); hit.className = 'round-hit';
     const stage = document.createElement('div'); stage.className = 'round-stage';
     wrap.replaceChild(stage, box); stage.append(box, ring, dot, hit); void trk;
-    let active = false, drag = null;
+    let active = false, drag = null, everPlayed = false;
+    v.addEventListener('playing', () => { if (active && !everPlayed) { everPlayed = true; grow(true); syncUi(); } });
+    if ('IntersectionObserver' in window) new IntersectionObserver(es => { for (const e of es) if (!e.isIntersecting && stage.classList.contains('big')) grow(false); }).observe(stage);
     const dur = () => (isFinite(v.duration) && v.duration > 0) ? v.duration : (+f.d || 0);
     const paint = () => { const d = dur(), fr = active && d ? Math.max(0, Math.min(1, v.currentTime / d)) : 0;
       arc.style.strokeDashoffset = String(C * (1 - fr)); const a = fr * 2 * Math.PI;
-      dot.style.left = (100 + R * Math.sin(a)) + 'px'; dot.style.top = (100 - R * Math.cos(a)) + 'px';
+      dot.style.left = (50 + R / 2 * Math.sin(a)) + '%'; dot.style.top = (50 - R / 2 * Math.cos(a)) + '%';
       if (drag) txt(t, fmtDur(v.currentTime)); else if (active) txt(t, fmtDur(Math.max(0, d - v.currentTime))); else txt(t, fmtDur(f.d || d)); };
-    const syncUi = () => { stage.classList.toggle('active', active); box.classList.toggle('playing', active && !v.paused); stage.classList.toggle('loading', box.classList.contains('wait') && !box.classList.contains('broken')); paint(); };
+    const grow = on => { stage.classList.toggle('big', on); stage.style.setProperty('--rs', on ? Math.min(innerWidth - 32, 320) + 'px' : ''); };
+    const syncUi = () => { stage.classList.toggle('active', active); stage.classList.toggle('played', active && everPlayed); box.classList.toggle('playing', active && !v.paused); stage.classList.toggle('loading', box.classList.contains('wait') && !box.classList.contains('broken')); paint(); };
     v.addEventListener('timeupdate', paint); v.addEventListener('play', syncUi); v.addEventListener('pause', syncUi);
     new MutationObserver(syncUi).observe(box, { attributes: true, attributeFilter: ['class'] });
     const geo = ev => { const r = hit.getBoundingClientRect(), x = ev.clientX - (r.left + r.width / 2), y = ev.clientY - (r.top + r.height / 2);
@@ -454,14 +457,14 @@ window.mediaEl = (f, m, fromOther) => {
     const toggle = () => {
       if (box.classList.contains('broken') && !started) { box.classList.remove('broken'); cap.hidden = true; return start(); }
       if (box.classList.contains('broken') || !v.src) return;
-      if (!active) { active = true; v.muted = false; v.loop = false; try { v.currentTime = 0; } catch { /* */ } if (playing && playing !== v) playing.pause(); playing = v;
+      if (!active) { active = true; everPlayed = false; v.muted = false; v.loop = false; try { v.currentTime = 0; } catch { /* */ } if (playing && playing !== v) playing.pause(); playing = v;
         v.play().catch(() => bad('Видео повреждено')); if (fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } }
-      else if (v.paused) { if (playing && playing !== v) playing.pause(); playing = v; v.play().catch(() => {}); }
+      else if (v.paused) { if (everPlayed) grow(true); if (playing && playing !== v) playing.pause(); playing = v; v.play().catch(() => {}); }
       else v.pause();
       syncUi(); };
     hit.addEventListener('pointerdown', ev => { ev.stopPropagation(); const g = geo(ev);
       if (g.d > R + 24) return; // мимо круга
-      const onArc = active && !box.classList.contains('wait') && dur() > 0 && g.d >= R - 24;
+      const onArc = active && everPlayed && !box.classList.contains('wait') && dur() > 0 && g.d >= R - 24;
       drag = { onArc, wasPlaying: !v.paused, id: ev.pointerId };
       if (onArc) { ev.preventDefault(); try { hit.setPointerCapture(ev.pointerId); } catch { /* */ } v.pause(); dot.hidden = false; stage.classList.add('seeking'); seekTo(g.ang); } });
     hit.addEventListener('pointermove', ev => { if (drag && drag.onArc && drag.id === ev.pointerId) { ev.preventDefault(); seekTo(geo(ev).ang); } });
@@ -472,7 +475,7 @@ window.mediaEl = (f, m, fromOther) => {
     hit.addEventListener('pointercancel', ev => up(ev, true));
     hit.addEventListener('click', ev => ev.stopPropagation());
     v.addEventListener('seeked', () => { if (!active && v.paused && posterUrl) v.play().catch(() => {}); });
-    v.onended = () => { if (!active) return; v.pause(); try { v.currentTime = 0; } catch { /* */ } syncUi(); }; // дуга сброшена, ▶ видна, касание — заново
+    v.onended = () => { if (!active) return; grow(false); v.pause(); try { v.currentTime = 0; } catch { /* */ } syncUi(); }; // дуга сброшена, ▶ видна, касание — заново
     syncUi();
     return wrap;
   }

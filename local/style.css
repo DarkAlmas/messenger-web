@@ -542,11 +542,13 @@ body.srv-down #loginBtn{opacity:.5;cursor:not-allowed}
 .link.gray{color:var(--muted,#8a8f98)}
 
 /* 23.10 кружок: дуга прогресса и перемотка (как Android v8) */
-.round-stage{position:relative;width:200px;height:200px;flex:none;touch-action:none}
-.round-ring{position:absolute;inset:0;width:200px;height:200px;pointer-events:none;overflow:visible}
+.round-stage{position:relative;width:var(--rs,200px);height:var(--rs,200px);flex:none;touch-action:none;transition:width .2s ease-in,height .2s ease-in}
+.round-stage.big{transition:width .25s ease-out,height .25s ease-out}
+.round-stage .round-v,.round-stage .round-v.playing,.round-stage .round-v video{width:100%!important;height:100%!important;min-width:0;max-width:none!important;max-height:none!important}
+.round-ring{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 .round-ring circle{fill:none;stroke-width:4;stroke-linecap:round;transform-origin:100px 100px;transform:rotate(-90deg)}
-.round-ring .rr-track{stroke:rgba(255,255,255,.25);display:none}.round-ring .rr-arc{stroke:#fff;display:none}.round-ring .rr-load{stroke:#fff;display:none}
-.round-stage.active:not(.loading) .rr-track,.round-stage.active:not(.loading) .rr-arc{display:inline}
+.round-ring .rr-track{stroke:rgba(255,255,255,.25);opacity:0;transition:opacity .15s}.round-ring .rr-arc{stroke:#fff;opacity:0;transition:opacity .15s}.round-ring .rr-load{stroke:#fff;display:none}
+.round-stage.played:not(.loading) .rr-track,.round-stage.played:not(.loading) .rr-arc{opacity:1}
 .round-stage.loading .rr-load{display:inline;animation:rrspin 1s linear infinite}
 @keyframes rrspin{from{transform:rotate(-90deg)}to{transform:rotate(270deg)}}
 .round-dot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#fff;box-shadow:0 0 2px #0008;pointer-events:none}.round-dot[hidden]{display:none}
