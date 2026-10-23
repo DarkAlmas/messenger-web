@@ -57,6 +57,37 @@
     if (o.f && typeof e.caption === 'string' && e.caption) o.caption = e.caption.slice(0, 4000);
     return { id: e.message_id, pt: JSON.stringify(o) };
   }
-  const api = { DEFAULT_KDF, BadPass, deriveKey, newSalt, seal, open, toEntry, toCache, b64e, b64d };
+
+  // ---- Формат v2 (BACKUP_FORMAT.md, общий с Android, байт в байт) ----
+  // backup.bin = "MLB2"(4) | 0x02 | memKiB u32 BE | iters u8 | salt(16) | nonce(12) | AES-256-GCM(ct||tag16), AAD = заголовок (45 байт).
+  // KDF: Argon2id(password = UTF-8("ml-backup-v2:" + uid + ":" + loginPassword), salt(16), m=memKiB, t=iters, p=1, v=0x13, 32 байта).
+  const MAGIC = [0x4d, 0x4c, 0x42, 0x32], HDR = 4 + 1 + 4 + 1 + 16 + 12;
+  const kdfInputV2 = (uid, pass) => te.encode('ml-backup-v2:' + uid + ':' + pass);
+  const isV2 = bin => { bin = new Uint8Array(bin); return bin.length >= 5 && MAGIC.every((b, i) => bin[i] === b) && bin[4] === 2; };
+  async function keyV2(uid, pass, salt, m, t) {
+    if (m < 8192 || m > 1048576 || t < 1 || t > 10) throw new Error('Неверные параметры KDF');
+    const raw = await argon().argon2id({ password: kdfInputV2(uid, pass), salt, parallelism: 1, iterations: t, memorySize: m, hashLength: 32, outputType: 'binary' });
+    return subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  }
+  /** obj → Uint8Array (новая соль и nonce при каждом сохранении). opts: {m,t,salt,nonce} — для тестов. */
+  async function encodeV2(obj, pass, uid, opts = {}) {
+    const m = opts.m || DEFAULT_KDF.m, t = opts.t || DEFAULT_KDF.t, salt = opts.salt || rnd(16), nonce = opts.nonce || rnd(12);
+    const h = new Uint8Array(HDR); h.set(MAGIC); h[4] = 2; new DataView(h.buffer).setUint32(5, m, false); h[9] = t; h.set(salt, 10); h.set(nonce, 26);
+    const key = await keyV2(uid, pass, salt, m, t);
+    const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: h, tagLength: 128 }, key, te.encode(JSON.stringify(obj))));
+    const out = new Uint8Array(HDR + ct.length); out.set(h); out.set(ct, HDR); return out;
+  }
+  async function decodeV2(bin, pass, uid) {
+    bin = new Uint8Array(bin); if (!isV2(bin) || bin.length < HDR + 16) throw new Error('Файл копии повреждён');
+    const h = bin.subarray(0, HDR), m = new DataView(bin.buffer, bin.byteOffset).getUint32(5, false), t = bin[9];
+    const key = await keyV2(uid, pass, bin.slice(10, 26), m, t);
+    let pt; try { pt = await subtle.decrypt({ name: 'AES-GCM', iv: bin.slice(26, 38), additionalData: h, tagLength: 128 }, key, bin.subarray(HDR)); }
+    catch { throw new BadPass(); }
+    const o = JSON.parse(td.decode(pt));
+    if (!o || o.uid !== uid) throw new Error('Копия принадлежит другому аккаунту');
+    if (!Array.isArray(o.messages)) throw new Error('В копии нет сообщений');
+    return o;
+  }
+  const api = { isV2, encodeV2, decodeV2, kdfInputV2, DEFAULT_KDF, BadPass, deriveKey, newSalt, seal, open, toEntry, toCache, b64e, b64d };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.Backup = api;
 })(typeof window !== 'undefined' ? window : globalThis);

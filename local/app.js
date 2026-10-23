@@ -105,8 +105,9 @@ $('loginForm').onsubmit = async e => {
       txt($('authMsg'), error ? ruErr(error) : 'Письмо с подтверждением отправлено на почту. Подтвердите и войдите.');
     } else {
       if (await beforeSignIn()) return;
+      loginPass = password; // только в памяти этой вкладки (для копии v2), не в localStorage
       const { error } = await sb.auth.signInWithPassword({ email, password });
-      if (error) txt($('authMsg'), ruErr(error));
+      if (error) { loginPass = null; txt($('authMsg'), ruErr(error)); }
     }
   } catch (err) { txt($('authMsg'), ruErr(err)); }
   finally { btn.disabled = false; }
@@ -147,6 +148,7 @@ $('pwForm').onsubmit = async ev => {
     const { error } = await sb.auth.updateUser({ password: a });
     if (error) return txt($('pwMsg'), ruErr(error));
     pwRecovery = false; $('pwDlg').close(); toast('Пароль изменён');
+    loginPass = a; saveV2().catch(e => console.warn('backup v2', e)); // перешифровка новым паролем, новая соль
   } catch (e) { txt($('pwMsg'), ruErr(e)); }
   finally { $('pwSave').disabled = false; $('pwNew1').value = ''; $('pwNew2').value = ''; }
 };
@@ -656,7 +658,7 @@ async function renderMsg(m, d) {
       // зашифровано для устройств, бывших до входа здесь: нейтральная серая строка, без «одной галочки навсегда»
       b.className = 'body e2e other-dev'; txt(b, 'Отправлено до входа на этом устройстве'); d.classList.add('other-dev'); lock.className = 'lock'; txt(lock, '\u{1F512}');
       if (!mine) { sendDlv(m); seenIO.observe(d); } // сообщение дошло до этого устройства (прочитать нельзя, но не «висит»)
-    } else { b.className = 'body e2e'; txt(b, pl && pl.pending ? 'Расшифровка…' : pl && pl.other ? 'Зашифровано для другого устройства' : pl && pl.fail ? 'Не удалось расшифровать' : 'Зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
+    } else { b.className = 'body e2e'; if (pl && pl.fail && earlySkipped()) { b.className = 'body e2e early'; txt(b, 'Ранние сообщения недоступны'); lock.className = 'lock'; txt(lock, ''); } else txt(b, pl && pl.pending ? 'Расшифровка…' : pl && pl.other ? 'Зашифровано для другого устройства' : pl && pl.fail ? 'Не удалось расшифровать' : 'Зашифровано, откройте в приложении'); lock.className = 'lock'; txt(lock, '🔒'); }
   } else {
     txt(b, m.body);
     lock.className = 'noe2e'; lock.title = 'Старое сообщение без шифрования'; txt(lock, '⚠ не зашифровано');
@@ -2008,13 +2010,13 @@ async function onSession(session) {
   me = session ? session.user : null;
   $('auth').hidden = !!me; $('app').hidden = !me;
   { const pw = $('password'); if (pw) pw.value = ''; }
-  if (!me) { window.clearLocalCache?.(); $('app').classList.remove('in-settings', 'in-chat'); currentChat = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); } // пароль не остаётся в поле ни после входа, ни после выхода
+  if (!me) { loginPass = null; window.clearLocalCache?.(); $('app').classList.remove('in-settings', 'in-chat'); currentChat = null; if (location.hash) history.replaceState(null, '', location.pathname + location.search); } // пароль не остаётся в поле ни после входа, ни после выхода
   if (me) {
     if (pwRecovery) setTimeout(showPwRecovery, 0);
     stopQr();
     refreshMe().catch(() => txt($('me'), me.email || '')); watchProfiles(); touchPresence();
     { const m = /^#(profile|settings)$/.exec(location.hash); if (m) openSettings(false, m[1]); else setNav('chats'); }
-    e2eStart().then(ok => { deviceCheck(true); if (ok && E2E.isFreshDevice && E2E.isFreshDevice()) offerRestore(); });
+    e2eStart().then(ok => { deviceCheck(true); if (!ok) return; if (loginPass) autoBackupV2().catch(e => console.warn('backup v2', e)); else if (E2E.isFreshDevice && E2E.isFreshDevice()) offerRestore(); });
     paintBackupRow();
     Promise.resolve(window.chatsFromCache?.()).finally(() => loadChats());
     window.pushSubscribe?.();
@@ -2115,6 +2117,7 @@ async function createBackup(pass, progress) {
   const messages = await collectMessages(progress);
   if (!messages.length && !(await askConfirm('В копию не попадёт ни одного сообщения: на этом устройстве нет расшифрованной переписки. Всё равно создать?', 'Создать'))) throw userErr('Отменено');
   progress('Шифруем копию…');
+  if (loginPass) return uploadV2(messages);
   const key = await Backup.deriveKey(pass, salt, kdf);
   const bin = await Backup.seal({ v: 1, uid: me.id, created_at: new Date().toISOString(), messages }, key, me.id);
   if (bin.length > 104857600) throw userErr('Копия больше 100 МБ');
@@ -2192,3 +2195,73 @@ async function offerRestore() {
   try { if (localStorage.getItem(k) || sessionStorage.getItem(k)) return; sessionStorage.setItem(k, '1'); } catch (e) { /* */ }
   try { if (await getBackupRow()) { try { localStorage.setItem(k, '1'); } catch (e) { /* */ } backupSheet(true); } } catch (e) { console.warn('key_backups', e); }
 }
+
+// ---------- копия v2 (BACKUP_FORMAT.md): шифруется паролем входа, восстанавливается молча ----------
+// KDF-вход: UTF-8("ml-backup-v2:" + uid + ":" + пароль). Пароль хранится только в памяти этой вкладки.
+var loginPass = null;
+const BK_FAIL = 'Не удалось скачать копию, попробуйте позже';
+const earlyKey = () => 'local-msgr-early-skip:' + (me && me.id);
+function earlySkipped() { try { return localStorage.getItem(earlyKey()) === '1'; } catch { return false; } }
+async function downloadBackup(path) { // null — копии нет; повтор при 500/544 до 3 раз
+  for (let i = 0; ; i++) {
+    const { data, error } = await sb.storage.from('backups').download(path);
+    if (!error) return new Uint8Array(await data.arrayBuffer());
+    const st = Number(error.statusCode || error.status || (error.originalError && error.originalError.status) || 0);
+    if (st === 404 || st === 400 || /not.?found/i.test(error.message || '')) return null;
+    if (i >= 2 || !(st === 500 || st === 544 || !st)) throw userErr(BK_FAIL);
+    await new Promise(r => setTimeout(r, 800 * (i + 1)));
+  }
+}
+async function uploadV2(messages) {
+  const bin = await Backup.encodeV2({ v: 1, uid: me.id, created_at: new Date().toISOString(), messages }, loginPass, me.id);
+  const path = me.id + '/backup.bin';
+  const { error } = await sb.storage.from('backups').upload(path, new Blob([bin], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream', upsert: true });
+  if (error) throw error;
+  const { error: e2 } = await sb.from('key_backups').upsert({ user_id: me.id, version: 2, salt: Backup.b64e(bin.slice(10, 26)), kdf: { alg: 'argon2id', m: Backup.DEFAULT_KDF.m, t: Backup.DEFAULT_KDF.t, p: 1 }, object_path: path, size_bytes: bin.length, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+  if (e2) throw e2;
+  return messages.length;
+}
+async function saveV2() { if (!loginPass || !me || !(await e2eStart())) return; return uploadV2(await collectMessages(() => {})); }
+async function importBackup(o) {
+  await E2E.importPlain(o.messages.map(Backup.toCache).filter(Boolean));
+  await loadChats().catch(() => {});
+  if (currentChat) { const li = document.querySelector(`#chatList li[data-id="${currentChat.id}"]`); if (li) { currentChat = null; li.click(); } }
+}
+let v2Ran = null;
+async function autoBackupV2() {
+  if (!me || !loginPass || v2Ran === me.id) return; v2Ran = me.id;
+  const row = await getBackupRow().catch(() => null);
+  let bin; try { bin = await downloadBackup((row && row.object_path) || me.id + '/backup.bin'); } catch (e) { toast(BK_FAIL, 3000); return; }
+  if (!bin) return saveV2();
+  if (Backup.isV2(bin)) {
+    try { await importBackup(await Backup.decodeV2(bin, loginPass, me.id)); }
+    catch (e) { console.warn('backup v2 decode', e && e.message); return; } // не наш пароль — копию не трогаем
+    return saveV2();
+  }
+  if (earlySkipped()) return;
+  migrateSheet(bin, row);
+}
+function migrateSheet(bin, row) {
+  const p = el('input'); p.type = 'password'; p.placeholder = 'Пароль'; p.autocomplete = 'off';
+  const st = el('p', 'hint small'); st.setAttribute('aria-live', 'polite');
+  const go = el('button', '', 'Перенести'); go.type = 'button';
+  const skip = el('button', 'link gray', 'Не помню — пропустить'); skip.type = 'button';
+  go.onclick = async () => {
+    if (!p.value || !row) return; go.disabled = true; st.classList.remove('err'); txt(st, '');
+    try {
+      const key = await Backup.deriveKey(p.value, row.salt, row.kdf);
+      const o = await Backup.open(bin, key, me.id);
+      await importBackup(o); p.value = '';
+      try { localStorage.removeItem(earlyKey()); } catch { /* */ }
+      $('sheetDlg').close(); toast('История восстановлена', 3000);
+      saveV2().catch(e => console.warn('backup v2', e)); // больше этот экран не появится: копия уже v2
+    } catch (e) { st.classList.add('err'); txt(st, e instanceof Backup.BadPass ? 'Неверный пароль' : BK_FAIL); }
+    finally { go.disabled = false; }
+  };
+  skip.onclick = () => { try { localStorage.setItem(earlyKey(), '1'); } catch { /* */ } $('sheetDlg').close(); if (currentChat) { const li = document.querySelector(`#chatList li[data-id="${currentChat.id}"]`); if (li) { currentChat = null; li.click(); } } };
+  const acts = el('div', 'bk-actions'); acts.append(go, skip);
+  sheet('Перенести старую переписку', [el('p', '', 'Введите пароль, который вы задавали для резервной копии. Это нужно один раз'), p, st, acts]);
+}
+// ключи/сессии изменились — копия v2 обновляется сама (не чаще раза в минуту), если пароль входа есть в памяти
+let v2Timer = null;
+addEventListener('e2e-changed', () => { if (!loginPass || v2Ran !== (me && me.id)) return; clearTimeout(v2Timer); v2Timer = setTimeout(() => saveV2().catch(e => console.warn('backup v2', e)), 60000); });

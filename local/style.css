@@ -538,3 +538,5 @@ html:not(.icons-ok) .ms:not(.svgi),html:not(.icons-ok) .settings-row__icon:not(.
 .qr.qr-off .qr-off-txt{color:var(--muted,#888);text-align:center;padding:16px;font-size:14px}
 body.srv-down #notice,body.srv-down #authMsg,body.srv-down #qrStatus,body.srv-down #qrTimerText,body.srv-down #qrRetry{display:none}
 body.srv-down #loginBtn{opacity:.5;cursor:not-allowed}
+.body.e2e.early{color:var(--muted,#8a8f98);font-style:italic}
+.link.gray{color:var(--muted,#8a8f98)}
