@@ -1299,12 +1299,11 @@ function outMenu(ev, id) {
       delete outbox[id]; window.saveOutbox?.(); const el = msgEls[id]; if (el) { el.remove(); delete msgEls[id]; } } }]);
 }
 function userErr(msg) { const e = new Error(msg); e.userMsg = msg; return e; }
-const KEY_CHANGED = 'Ключ безопасности собеседника изменился (новое устройство или переустановка). Сообщение НЕ отправлено.\n\nНадёжнее сначала сверить код безопасности (кнопка «🔒 Код безопасности»). Нажмите «ОК», только если уверены, что это действительно собеседник: новый ключ будет принят.';
+// Как в WhatsApp/Telegram: смена ключа собеседника не блокирует отправку — новый ключ принимается молча, в чате серая строка «Код безопасности изменился».
 async function encryptForPeer(pt, peer = peerId) {
   try { return await E2E.encryptDM(peer, pt); }
   catch (e) {
     if (!(e instanceof E2E.KeyChange)) throw e;
-    if (!confirm(KEY_CHANGED)) throw userErr('Не отправлено: ключ собеседника изменился.');
     await E2E.acceptKeys(e.userId); return E2E.encryptDM(peer, pt);
   }
 }
@@ -1347,12 +1346,7 @@ async function sendPayload(chat, pt, extra) {
   if (chat.kind === 'direct') {
     const peer = await chatPeer(chat);
     if (!peer) throw userErr('Сообщение не отправлено: не удалось определить собеседника.');
-    if (await E2E.sendBlocked(peer)) {
-      const pp = await getProfile(peer).catch(() => null);
-      const go = await askConfirm('Код безопасности ' + (pp && pp.username ? '@' + pp.username : 'собеседника') + ' изменился, а раньше вы его проверяли. Сверьте новый код, прежде чем писать.', 'Всё равно отправить', 'Сверить код');
-      if (!go) { if (peer === peerId) showSafety().catch(() => {}); const e = userErr('Не отправлено: сначала сверьте код безопасности.'); e.quiet = true; throw e; }
-      await E2E.unblockSend(peer);
-    }
+    if (await E2E.sendBlocked(peer)) await E2E.unblockSend(peer); // без диалогов: только системная строка в чате
     if (!(await E2E.peerHasKeys(peer))) throw userErr('Сообщение не отправлено: у собеседника нет ключей шифрования — он ещё не входил в обновлённое приложение или на сайт. Попросите его войти, затем повторите.' + NO_PLAIN);
     const r = await encryptForPeer(pt, peer);
     if (!r) throw userErr('Сообщение не отправлено: у собеседника больше нет ключей шифрования.' + NO_PLAIN);
