@@ -327,7 +327,6 @@ function chatMenuItems(c) {
   const muted = isMuted(c), H = 3600e3;
   const mute = until => () => chatPrefs(c, { p_muted_until: until }, 'Уведомления отключены');
   return [
-    ...(c.kind === 'direct' && c === currentChat && peerId ? [{ t: E2E && E2E.isVerified(peerId) ? 'Код безопасности · проверен' : 'Код безопасности', i: 'verified_user', f: () => showSafety().catch(e => toastLong(ruErr(e))) }] : []),
     { t: c.pinned ? 'Открепить' : 'Закрепить', i: 'push_pin', f: () => chatPrefs(c, { p_pinned: !c.pinned }, c.pinned ? 'Чат откреплён' : 'Чат закреплён') },
     ...(muted ? [{ t: 'Включить звук', i: 'notifications', f: () => chatPrefs(c, { p_unmute: true }, 'Звук включён') }] : [
       { t: 'Без звука на 1 час', i: 'notifications_off', f: mute(new Date(Date.now() + H).toISOString()) },
@@ -1637,7 +1636,7 @@ async function downloadFile(f, fromOther) {
 // ---------- код безопасности ----------
 let peerKeys = false;
 // Шапка чата не меняется: «Код безопасности» — в профиле собеседника
-function safetyLabel() { const b = $('peerSafety'); if (b && peerId && E2E) txt(b, E2E.isVerified(peerId) ? 'Код безопасности · проверен' : 'Код безопасности'); }
+function safetyLabel() { const b = $('peerSafety'); if (b && peerId && E2E) txt(b, E2E.isVerified(peerId) ? 'Шифрование · проверено' : 'Шифрование'); }
 /** Системные строки «Код безопасности @ника изменился» — только из локального хранилища этого браузера (E2E.keyEvents).
  *  С сервера и из сообщений такие события не принимаются; ник — только textContent. */
 async function paintKeyEvents() {
@@ -1673,10 +1672,10 @@ async function showSafety() {
   });
   if (!nums.length) { const p = document.createElement('p'); txt(p, 'Нет ключей собеседника.'); list.append(p); }
   const st = () => { const s = $('safetyState'); s.className = 'hint';
-    if (E2E.hasPendingChange(peer)) { txt(s, '⚠ Ключ собеседника изменился. Сверьте новый код, прежде чем принимать.'); }
+    if (E2E.hasPendingChange(peer)) { txt(s, 'Код безопасности изменился (новое устройство собеседника).'); }
     else if (E2E.isVerified(peer)) { s.className = 'hint ok'; txt(s, '✅ Код проверен'); }
     else txt(s, 'Код ещё не проверен.');
-    $('acceptBtn').hidden = !E2E.hasPendingChange(peer); safetyLabel(); };
+    $('acceptBtn').hidden = true; safetyLabel(); };
   st(); $('scanInput').value = '';
   const check = async v => {
     if (!v) return;
@@ -1685,7 +1684,8 @@ async function showSafety() {
   };
   $('checkBtn').onclick = () => check($('scanInput').value.trim());
   $('matchBtn').onclick = async () => { if (confirm('Вы сравнили все 60 цифр с экраном собеседника, и они совпадают?')) { await E2E.markVerified(peer); st(); } };
-  $('acceptBtn').onclick = async () => { if (confirm('Принять новый ключ? Делайте это, только если собеседник подтвердил смену устройства. Надёжнее — сначала сверить QR.')) { await E2E.acceptKeys(peer); st(); } };
+  $('acceptBtn').hidden = true; // новый ключ принимается сам, без кнопки
+  if (E2E.hasPendingChange(peer)) { try { await E2E.acceptKeys(peer); } catch (e) { console.warn('acceptKeys', e); } st(); }
   $('scanBtn').hidden = !('BarcodeDetector' in window && navigator.mediaDevices);
   $('scanBtn').onclick = () => scanQr().then(check).catch(e => toastLong('Камера недоступна: ' + ruErr(e)));
   $('closeSafety').onclick = () => { stopScan(); $('safetyDlg').close(); };
