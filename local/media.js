@@ -428,11 +428,52 @@ window.mediaEl = (f, m, fromOther) => {
     const start = () => { if (started) return; started = true; mediaSrcs(f).then(list => { srcs = list; si = 0; v.src = list[0]; v.load(); })
       .catch(e => { started = false; bad(e && e.corrupt ? 'Видео повреждено' : 'Не загрузилось — нажмите, чтобы повторить'); }); };
     start();
-    box.onclick = ev => { ev.stopPropagation(); if (box.classList.contains('broken') && !started) { box.classList.remove('broken'); cap.hidden = true; return start(); } if (box.classList.contains('broken') || !v.src) return;
-      const on = !box.classList.contains('playing'); box.classList.toggle('playing', on); v.muted = !on; v.loop = !on; v.currentTime = 0;
-      v.play().catch(() => bad('Видео повреждено')); if (on && fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } };
-    v.addEventListener('seeked', () => { if (!box.classList.contains('playing') && v.paused && posterUrl) v.play().catch(() => {}); }, { once: false });
-    v.onended = () => { box.classList.remove('playing'); v.muted = true; v.loop = true; v.play().catch(() => {}); };
+    // 23.10 (как Android v8 / Telegram): дуга прогресса по краю (12 часов, по часовой), перемотка перетаскиванием дуги (±24px),
+    // касание внутри круга (включая ▶ — это просто картинка) — пауза/пуск; касание дуги только перематывает.
+    const NS = 'http://www.w3.org/2000/svg', R = 98, C = 2 * Math.PI * R;
+    const ring = document.createElementNS(NS, 'svg'); ring.setAttribute('class', 'round-ring'); ring.setAttribute('viewBox', '0 0 200 200'); ring.setAttribute('aria-hidden', 'true');
+    const mk = cls => { const c = document.createElementNS(NS, 'circle'); c.setAttribute('cx', '100'); c.setAttribute('cy', '100'); c.setAttribute('r', String(R)); c.setAttribute('class', cls); ring.append(c); return c; };
+    const trk = mk('rr-track'), arc = mk('rr-arc'), load = mk('rr-load');
+    arc.style.strokeDasharray = C + ' ' + C; arc.style.strokeDashoffset = String(C); load.style.strokeDasharray = (C * 0.25) + ' ' + C;
+    const dot = document.createElement('span'); dot.className = 'round-dot'; dot.hidden = true;
+    const hit = document.createElement('div'); hit.className = 'round-hit';
+    const stage = document.createElement('div'); stage.className = 'round-stage';
+    wrap.replaceChild(stage, box); stage.append(box, ring, dot, hit); void trk;
+    let active = false, drag = null;
+    const dur = () => (isFinite(v.duration) && v.duration > 0) ? v.duration : (+f.d || 0);
+    const paint = () => { const d = dur(), fr = active && d ? Math.max(0, Math.min(1, v.currentTime / d)) : 0;
+      arc.style.strokeDashoffset = String(C * (1 - fr)); const a = fr * 2 * Math.PI;
+      dot.style.left = (100 + R * Math.sin(a)) + 'px'; dot.style.top = (100 - R * Math.cos(a)) + 'px';
+      if (drag) txt(t, fmtDur(v.currentTime)); else if (active) txt(t, fmtDur(Math.max(0, d - v.currentTime))); else txt(t, fmtDur(f.d || d)); };
+    const syncUi = () => { stage.classList.toggle('active', active); box.classList.toggle('playing', active && !v.paused); stage.classList.toggle('loading', box.classList.contains('wait') && !box.classList.contains('broken')); paint(); };
+    v.addEventListener('timeupdate', paint); v.addEventListener('play', syncUi); v.addEventListener('pause', syncUi);
+    new MutationObserver(syncUi).observe(box, { attributes: true, attributeFilter: ['class'] });
+    const geo = ev => { const r = hit.getBoundingClientRect(), x = ev.clientX - (r.left + r.width / 2), y = ev.clientY - (r.top + r.height / 2);
+      const k = 200 / box.getBoundingClientRect().width || 1; return { d: Math.hypot(x, y) * k, ang: (Math.atan2(x, -y) + 2 * Math.PI) % (2 * Math.PI) }; };
+    const seekTo = ang => { const d = dur(); if (!d) return; try { v.currentTime = Math.min(d - 0.05, ang / (2 * Math.PI) * d); } catch { /* */ } paint(); };
+    const toggle = () => {
+      if (box.classList.contains('broken') && !started) { box.classList.remove('broken'); cap.hidden = true; return start(); }
+      if (box.classList.contains('broken') || !v.src) return;
+      if (!active) { active = true; v.muted = false; v.loop = false; try { v.currentTime = 0; } catch { /* */ } if (playing && playing !== v) playing.pause(); playing = v;
+        v.play().catch(() => bad('Видео повреждено')); if (fromOther) try { localStorage.setItem(heardKey(m.id), '1'); } catch { /* */ } }
+      else if (v.paused) { if (playing && playing !== v) playing.pause(); playing = v; v.play().catch(() => {}); }
+      else v.pause();
+      syncUi(); };
+    hit.addEventListener('pointerdown', ev => { ev.stopPropagation(); const g = geo(ev);
+      if (g.d > R + 24) return; // мимо круга
+      const onArc = active && !box.classList.contains('wait') && dur() > 0 && g.d >= R - 24;
+      drag = { onArc, wasPlaying: !v.paused, id: ev.pointerId };
+      if (onArc) { ev.preventDefault(); try { hit.setPointerCapture(ev.pointerId); } catch { /* */ } v.pause(); dot.hidden = false; stage.classList.add('seeking'); seekTo(g.ang); } });
+    hit.addEventListener('pointermove', ev => { if (drag && drag.onArc && drag.id === ev.pointerId) { ev.preventDefault(); seekTo(geo(ev).ang); } });
+    const up = (ev, cancel) => { if (!drag || drag.id !== ev.pointerId) return; const d0 = drag; drag = null;
+      if (d0.onArc) { dot.hidden = true; stage.classList.remove('seeking'); if (d0.wasPlaying) v.play().catch(() => {}); paint(); }
+      else if (!cancel) toggle(); };
+    hit.addEventListener('pointerup', ev => { ev.stopPropagation(); up(ev, false); });
+    hit.addEventListener('pointercancel', ev => up(ev, true));
+    hit.addEventListener('click', ev => ev.stopPropagation());
+    v.addEventListener('seeked', () => { if (!active && v.paused && posterUrl) v.play().catch(() => {}); });
+    v.onended = () => { if (!active) return; v.pause(); try { v.currentTime = 0; } catch { /* */ } syncUi(); }; // дуга сброшена, ▶ видна, касание — заново
+    syncUi();
     return wrap;
   }
   return voiceEl(f, m, fromOther);
