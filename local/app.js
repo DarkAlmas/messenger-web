@@ -509,7 +509,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261023local10').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261023local11').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1387,6 +1387,7 @@ async function editEncrypted(m, pt) {
 }
 
 // ---------- файлы: AES-256-GCM как в Android (ключ и sha256 внутри зашифрованного сообщения) ----------
+const SEND_MLC1 = false; // включить, когда приложение научится MLC1 (MEDIA_FORMAT.md)
 const MAX_FILE = 25 * 1024 * 1024;
 const RISKY = ['apk','apks','xapk','aab','exe','msi','bat','cmd','sh','jar','dex','js','vbs','ps1','scr','com','html','htm','xhtml','svg','mht','mhtml'];
 const safeName = n => { n = String(n || 'file').replace(/[\\/\u0000-\u001f\u007f]/g, '_').replace(/\.\./g, '_').trim(); if (!n || n === '.') n = 'file'; return n.length > 200 ? n.slice(-200) : n; };
@@ -1407,7 +1408,7 @@ async function sendFile(chat, file, extra, caption, fw, job) {
   const fpeer = chat.kind === 'direct' ? await chatPeer(chat) : null;
   if (chat.kind === 'direct' && !(fpeer && await E2E.peerHasKeys(fpeer))) throw userErr('Файл не отправлен: у собеседника нет ключей шифрования, а файлы без шифрования не отправляются.');
   const plain = new Uint8Array(await file.arrayBuffer());
-  const enc = await E2E.encryptFile(plain, { mlc1: !!(job && job.media) }); // голосовые/кружки — MLC1 (потоково, MEDIA_FORMAT.md)
+  const enc = await E2E.encryptFile(plain, { mlc1: SEND_MLC1 && !!(job && job.media) }); // MLC1 при отправке временно выключен (Android v8 его не читает); чтение MLC1 включено
   const bucket = job && job.media ? MEDIA_BUCKET : 'chat-files';
   const path = `chat/${chat.id}/${crypto.randomUUID()}_file.bin`;
   await uploadEnc(path, enc.ct, bucket);
