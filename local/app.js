@@ -509,7 +509,7 @@ function watchProfiles() {
 let chatHasE2e = false, peerId = null;
 // ---------- сквозное шифрование (e2e.js + libsignal WASM) ----------
 let E2E = null, e2eErr = null;
-const e2eMod = import('./e2e.js?v=20261023local11').then(m => { m.init(sb); return (E2E = m); });
+const e2eMod = import('./e2e.js?v=20261023local12').then(m => { m.init(sb); return (E2E = m); });
 // Проверка устройства: при входе, восстановлении сессии, раз в 10 минут и при возврате на вкладку
 let devCheckAt = 0;
 async function deviceCheck(force) {
@@ -1387,7 +1387,7 @@ async function editEncrypted(m, pt) {
 }
 
 // ---------- файлы: AES-256-GCM как в Android (ключ и sha256 внутри зашифрованного сообщения) ----------
-const SEND_MLC1 = false; // включить, когда приложение научится MLC1 (MEDIA_FORMAT.md)
+const SEND_MLC1 = true; // включить, когда приложение научится MLC1 (MEDIA_FORMAT.md)
 const MAX_FILE = 25 * 1024 * 1024;
 const RISKY = ['apk','apks','xapk','aab','exe','msi','bat','cmd','sh','jar','dex','js','vbs','ps1','scr','com','html','htm','xhtml','svg','mht','mhtml'];
 const safeName = n => { n = String(n || 'file').replace(/[\\/\u0000-\u001f\u007f]/g, '_').replace(/\.\./g, '_').trim(); if (!n || n === '.') n = 'file'; return n.length > 200 ? n.slice(-200) : n; };
