@@ -16,17 +16,23 @@ const SHOT = process.argv[3] || '/tmp';
   ok(csp.includes("connect-src 'none'") && csp.includes("script-src 'self'") && !/unsafe-inline|unsafe-eval/.test(csp), 'CSP unchanged');
   const scripts = await pg.evaluate(() => [...document.scripts].filter(s => s.src).map(s => s.src));
   const origin = new globalThis.URL(URL).origin;
-  ok(scripts.every(s => s.startsWith(origin) && /\?v=14\.5$/.test(s)), 'scripts are same-origin ?v=14.5');
+  ok(scripts.every(s => s.startsWith(origin) && /\?v=14\.5\.3$/.test(s)), 'scripts are same-origin ?v=14.5.3');
   ok(scripts.some(s => s.includes('/vendor/three/three.min.js')), 'Three.js vendored');
   ok(await pg.evaluate(() => [...document.querySelectorAll('#rtabs button')].map(b => b.textContent).join() === 'Схема,Шасси,Трасса'), 'robot tabs unchanged');
   ok(await pg.evaluate(() => !!document.querySelector('#undo') && !!document.querySelector('#redo') && !!document.querySelector('#simMore') && !!document.querySelector('#setHold')), 'undo and hold-menu chrome still present');
 
+  ok(await pg.evaluate(() => {
+    const item = document.querySelector('#palette .item[data-type="pir"]');
+    const pins = window.PARTS.pir && window.PARTS.pir.pins.map(q => q.id).join();
+    return !!item && pins === 'VCC,OUT,GND' && window.PARTS.pir.props.motion === false && window.PARTS.pir.sensor === 'pir';
+  }), 'PIR is in the palette with VCC/OUT/GND and motion off');
   await pg.evaluate(() => {
     const p = __sim.proj;
     p.parts.push({ id: 'U2', type: 'hcsr04', x: 200, y: 0, rot: 0, props: { dist: 50 } });
     p.parts.push({ id: 'R9', type: 'ldr', x: 200, y: 80, rot: 0, props: { lux: 100 } });
     p.parts.push({ id: 'U3', type: 'dht22', x: 200, y: 160, rot: 0, props: { temp: 24, hum: 45 } });
     p.parts.push({ id: 'V9', type: 'vl53l0x', x: 200, y: 240, rot: 0, props: { mm: 300 } });
+    p.parts.push({ id: 'P1', type: 'pir', x: 200, y: 320, rot: 0, props: {} });
   });
   await pg.click('#w3tab'); await pg.waitForTimeout(400);
   ok(await pg.evaluate(() => World3D.active && !document.querySelector('#w3pane').hidden && document.querySelector('#w3fail').hidden), '3D pane open, WebGL ok');
@@ -51,7 +57,23 @@ const SHOT = process.argv[3] || '/tmp';
   ok(placed.dist === 31 && /31 см/.test(placed.label), 'ultrasonic hits the cube, label shows cm');
   ok(placed.lux > 100, 'flashlight raises LDR lux (' + placed.lux + ')');
   ok(placed.temp > 24, 'heat raises DHT temp (' + placed.temp + ')');
+  ok(placed.hum >= 80, 'default steam is inside R50 and raises humidity (' + placed.hum + ')');
   ok(placed.mm === 300, 'VL53 millimeters left alone');
+  const humSpan = await pg.evaluate(() => {
+    const dht = __sim.proj.world3d.sensors.find(s => s.kind === 'dht');
+    const u = __sim.proj.world3d.stimuli.find(s => s.type === 'humid');
+    const saved = { x: u.x, y: u.y, z: u.z };
+    const read = () => { World3D.getReadings(); return __sim.proj.parts.find(p => p.type === 'dht22').props.hum; };
+    u.x = dht.x; u.y = dht.y; u.z = dht.z;
+    const onSensor = read();
+    u.z = dht.z + 80;
+    const outside = read();
+    u.x = saved.x; u.y = saved.y; u.z = saved.z;
+    read();
+    return { onSensor, outside };
+  });
+  ok(humSpan.onSensor >= 80 && humSpan.onSensor <= 100, 'steam on the DHT → ' + humSpan.onSensor);
+  ok(humSpan.outside === 45, 'steam outside R50 stays at ambient 45');
   const blockAt = await pg.evaluate(() => World3D.screenPos('stimulus', __sim.proj.world3d.stimuli.find(s => s.type === 'block').id));
   await pg.mouse.click(blockAt.x, blockAt.y);
   await pg.waitForTimeout(120);
@@ -86,8 +108,13 @@ const SHOT = process.argv[3] || '/tmp';
     World3D.onOpen();
   });
   await pg.waitForTimeout(100);
-  const motion = await pg.evaluate(() => World3D.getReadings().sensors.find(s => s.kind === 'pir').motion);
-  ok(motion === true, 'mover inside the PIR cone');
+  const motion = await pg.evaluate(() => {
+    const read = World3D.getReadings().sensors.find(s => s.kind === 'pir').motion;
+    const part = __sim.proj.parts.find(p => p.type === 'pir');
+    const svg = window.PARTS.pir.draw(part, {});
+    return { read, prop: part.props.motion, label: /движение/.test(svg) };
+  });
+  ok(motion.read === true && motion.prop === true && motion.label, 'mover inside the PIR cone sets props.motion');
 
   const saved = await pg.evaluate(() => JSON.parse(JSON.stringify(__sim.proj.world3d)));
   await pg.reload(); await pg.waitForTimeout(400);
@@ -110,6 +137,10 @@ const SHOT = process.argv[3] || '/tmp';
     return { w3: World3D.active, svg: !!(node && node.closest && node.closest('#svg')), undo: !!document.querySelector('#undo'), hold: !!document.querySelector('#setHold') };
   });
   ok(!back.w3 && back.svg && back.undo && back.hold, 'schema is back, undo and hold menu remain');
+  await pg.evaluate(() => { const p = __sim.proj.parts.find(x => x.type === 'hcsr04'); p.props.dist = 123; __sim.start(); });
+  await pg.waitForTimeout(280);
+  ok(await pg.evaluate(() => __sim.proj.parts.find(x => x.type === 'hcsr04').props.dist === 123), '3D closed: running sim leaves the distance slider alone');
+  await pg.evaluate(() => __sim.stop());
   ok(errs.length === 0, 'no page errors ' + errs.join(' | '));
   ok(net.length === 0, 'no off-origin requests ' + net.join(' '));
 
